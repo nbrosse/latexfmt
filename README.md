@@ -1,0 +1,2 @@
+# latexfmt
+Latex formatter
