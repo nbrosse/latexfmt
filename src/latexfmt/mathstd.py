@@ -21,7 +21,14 @@ from __future__ import annotations
 
 import re
 
-from .texutil import BEGIN_RE, END_RE, NESTED_MATH, OPAQUE
+from .texutil import (
+    BEGIN_RE,
+    END_RE,
+    NESTED_MATH,
+    OPAQUE,
+    end_outside_comment,
+    has_unescaped_percent,
+)
 
 BLOCK_BEGIN_RE = re.compile(r"^(\s*)\\begin\{(equation|align)\}(.*)$")
 
@@ -39,15 +46,6 @@ OP_MACRO = {
     "implies", "hookrightarrow",
     "quad", "qquad",
 }
-
-
-def _has_unescaped_percent(s: str) -> bool:
-    i = 0
-    while i < len(s):
-        if s[i] == "%" and (i == 0 or s[i - 1] != "\\"):
-            return True
-        i += 1
-    return False
 
 
 def _starts_with_op(ch: str) -> bool:
@@ -203,7 +201,7 @@ def _wrap_row(chunks: list[str], indent: int, width: int, reserve: int = 0) -> l
     chunks = [re.sub(r" {2,}", " ", c) for c in flat]
     n = len(chunks)
     allow = [False] * n
-    force = [_has_unescaped_percent(c) for c in chunks]
+    force = [has_unescaped_percent(c) for c in chunks]
     for k in range(1, n):
         if _starts_with_op(chunks[k]):
             allow[k] = True
@@ -273,11 +271,11 @@ def standardize(lines: list[str], width: int = 100) -> list[str]:
             j = i + 1
             tail = ""
             while j < n:
-                em = re.match(r"^(.*)\\end\{" + re.escape(env) + r"\}(.*)$", lines[j])
+                em = end_outside_comment(lines[j], env)
                 if em:
-                    if em.group(1).strip():
-                        body_lines.append(em.group(1))
-                    tail = em.group(2)
+                    if em[0].strip():
+                        body_lines.append(em[0])
+                    tail = em[1]
                     break
                 body_lines.append(lines[j])
                 j += 1
@@ -292,7 +290,12 @@ def standardize(lines: list[str], width: int = 100) -> list[str]:
                 wl = _wrap_row(row, body_indent, width, reserve=0 if last_row else 3)
                 for li, ln in enumerate(wl):
                     if li == len(wl) - 1 and not last_row:
-                        out.append(ln + " \\\\")
+                        if has_unescaped_percent(ln):
+                            # \\ appended after a comment would be commented out
+                            out.append(ln)
+                            out.append(" " * body_indent + "\\\\")
+                        else:
+                            out.append(ln + " \\\\")
                     else:
                         out.append(ln)
             end_line = indent + "\\end{" + env + "}"

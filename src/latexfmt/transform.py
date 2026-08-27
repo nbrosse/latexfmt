@@ -18,9 +18,11 @@ from .texutil import (
     LABEL_RE,
     MATH,
     OPAQUE,
+    end_outside_comment,
+    findall_outside_comments,
     has_unescaped_percent,
-    strip_comment,
     strip_toplevel_amp,
+    sub_outside_comments,
     top_level_has_linebreak,
 )
 
@@ -90,16 +92,16 @@ def pass_convert(lines: list[str], autonum: bool, refs: set[str],
         db = re.match(r"^(\s*)\\\[\s*(.*)$", line)
         if mb:
             indent, env, rest = mb.group(1), mb.group(2), mb.group(3)
-            block = [strip_comment(rest)]
+            block = [rest]
             j = i + 1
             tail = ""
             while j < n:
-                em = re.match(r"^(.*)\\end\{" + re.escape(env) + r"\}(.*)$", lines[j])
+                em = end_outside_comment(lines[j], env)
                 if em:
-                    block.append(strip_comment(em.group(1)))
-                    tail = em.group(2)
+                    block.append(em[0])
+                    tail = em[1]
                     break
-                block.append(strip_comment(lines[j]))
+                block.append(lines[j])
                 j += 1
             body = "\n".join(block)
             multiline = top_level_has_linebreak(body)
@@ -115,7 +117,7 @@ def pass_convert(lines: list[str], autonum: bool, refs: set[str],
             block = []
             j = i + 1
             while j < n and lines[j].strip() != "\\]":
-                block.append(strip_comment(lines[j]))
+                block.append(lines[j])
                 j += 1
             body = "\n".join(block)
             multiline = top_level_has_linebreak(body)
@@ -140,24 +142,23 @@ def _emit_block(indent: str, target: str, body: str, multiline: bool,
 
     out = [indent + "\\begin{" + target + "}"]
     if multiline:
-        for bl in LABEL_RE.sub(drop, body).split("\n"):
-            bl = bl.strip()
-            if bl:
-                out.append(indent + "  " + bl)
+        body = sub_outside_comments(LABEL_RE, drop, body)
     else:
         kept: list[str] = []
-        for lb in LABEL_RE.findall(body):
+        for lb in findall_outside_comments(LABEL_RE, body):
             if not prune or lb in refs:
                 kept.append(lb)
             else:
                 removed.append(lb)
-        body_nolabel = strip_toplevel_amp(LABEL_RE.sub("", body))
+        # A single-line display carries its label on the \begin line; alignment
+        # tabs are meaningless once the row is not split.
+        body = strip_toplevel_amp(sub_outside_comments(LABEL_RE, "", body))
         if kept:
             out[0] += "".join("\\label{%s}" % lb for lb in kept)
-        for bl in body_nolabel.split("\n"):
-            bl = bl.strip()
-            if bl:
-                out.append(indent + "  " + bl)
+    for bl in body.split("\n"):
+        bl = bl.strip()
+        if bl:
+            out.append(indent + "  " + bl)
     out.append(indent + "\\end{" + target + "}")
     return out
 

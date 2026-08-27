@@ -39,14 +39,49 @@ _HYPERREF_RE = re.compile(r"\\hyperref\s*\[([^\]]*)\]")
 _INPUT_RE = re.compile(r"\\(?:input|include|subfile)\{([^}]*)\}")
 
 
-def strip_comment(line: str) -> str:
-    """Drop an unescaped ``%...`` comment (keep escaped ``\\%``)."""
+def split_comment(line: str) -> tuple[str, str]:
+    """Split ``line`` at its first unescaped ``%`` into (code, comment).
+
+    ``comment`` includes the ``%`` and is ``""`` when the line has none.
+    """
     i = 0
     while i < len(line):
         if line[i] == "%" and (i == 0 or line[i - 1] != "\\"):
-            return line[:i]
+            return line[:i], line[i:]
         i += 1
-    return line
+    return line, ""
+
+
+def strip_comment(line: str) -> str:
+    """Drop an unescaped ``%...`` comment (keep escaped ``\\%``)."""
+    return split_comment(line)[0]
+
+
+def sub_outside_comments(rx: re.Pattern, repl, text: str) -> str:
+    """``rx.sub(repl, ...)`` applied to the code part of every line only.
+
+    Comments are passed through untouched, so a commented-out ``\\label`` is
+    never rewritten or counted.
+    """
+    out = []
+    for line in text.split("\n"):
+        code, comment = split_comment(line)
+        out.append(rx.sub(repl, code) + comment)
+    return "\n".join(out)
+
+
+def findall_outside_comments(rx: re.Pattern, text: str) -> list:
+    """``rx.findall`` over the code part of every line only."""
+    found: list = []
+    for line in text.split("\n"):
+        found.extend(rx.findall(split_comment(line)[0]))
+    return found
+
+
+def _skip_comment(s: str, i: int) -> int:
+    """Index of the newline ending the comment starting at ``s[i]`` (or len)."""
+    nl = s.find("\n", i)
+    return len(s) if nl < 0 else nl
 
 
 def has_unescaped_percent(s: str) -> bool:
@@ -56,6 +91,19 @@ def has_unescaped_percent(s: str) -> bool:
             return True
         i += 1
     return False
+
+
+def end_outside_comment(line: str, env: str) -> tuple[str, str] | None:
+    """Match ``\\end{env}`` outside a comment; return (before, after) or None.
+
+    Scanning the code part only keeps a commented-out ``\\end{...}`` from
+    truncating a block.
+    """
+    code, comment = split_comment(line)
+    m = re.match(r"^(.*)\\end\{" + re.escape(env) + r"\}(.*)$", code)
+    if not m:
+        return None
+    return m.group(1), m.group(2) + comment
 
 
 def top_level_has_linebreak(body: str) -> bool:
@@ -76,6 +124,9 @@ def top_level_has_linebreak(body: str) -> bool:
             i = m.end()
             continue
         c = s[i]
+        if c == "%" and (i == 0 or s[i - 1] != "\\"):
+            i = _skip_comment(s, i)  # a \\ inside a comment is not a row break
+            continue
         if c == "\\" and i + 1 < n and s[i + 1] == "\\":
             nxt = s[i + 2] if i + 2 < n else ""
             if braced == 0 and envd == 0 and nxt != "[":
@@ -110,6 +161,11 @@ def strip_toplevel_amp(body: str) -> str:
             i = m.end()
             continue
         c = s[i]
+        if c == "%" and (i == 0 or s[i - 1] != "\\"):
+            end = _skip_comment(s, i)  # copy the comment through untouched
+            out.append(s[i:end])
+            i = end
+            continue
         if c == "&" and braced == 0 and envd == 0 and (i == 0 or s[i - 1] != "\\"):
             i += 1
             continue
