@@ -18,6 +18,8 @@ class Config:
     build: bool = True
     latexindent: bool = True
     latexindent_config: str = ".latexindent.yaml"
+    encoding: str = "utf-8"
+    strict: bool = False
     all: bool = False
     backup: bool = False
     exclude: list[str] = field(default_factory=lambda: ["*_old*", "*sections_old*"])

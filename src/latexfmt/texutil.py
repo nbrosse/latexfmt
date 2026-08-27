@@ -39,6 +39,33 @@ _HYPERREF_RE = re.compile(r"\\hyperref\s*\[([^\]]*)\]")
 _INPUT_RE = re.compile(r"\\(?:input|include|subfile)\{([^}]*)\}")
 
 
+class LatexfmtError(Exception):
+    """A user-facing error: reported as a message, never as a traceback."""
+
+
+def read_text(path: Path, encoding: str = "utf-8") -> str:
+    """Read ``path``, turning decode/IO failures into a LatexfmtError.
+
+    Guessing an encoding would silently corrupt the file on write-back, so a
+    mismatch is reported and the user picks with ``--encoding``.
+    """
+    try:
+        return path.read_text(encoding=encoding)
+    except UnicodeDecodeError as exc:
+        raise LatexfmtError(
+            f"{path}: not valid {encoding} (byte {exc.start}); "
+            f"re-run with --encoding=<codec>") from exc
+    except OSError as exc:
+        raise LatexfmtError(f"{path}: {exc.strerror}") from exc
+
+
+def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    try:
+        path.write_text(text, encoding=encoding)
+    except (OSError, UnicodeEncodeError) as exc:
+        raise LatexfmtError(f"{path}: cannot write ({exc})") from exc
+
+
 def split_comment(line: str) -> tuple[str, str]:
     """Split ``line`` at its first unescaped ``%`` into (code, comment).
 
@@ -178,6 +205,27 @@ def strip_toplevel_amp(body: str) -> str:
     return "".join(out)
 
 
+def opaque_mask(lines: list[str]) -> list[bool]:
+    """Per-line flag: True where the line is inside an opaque environment.
+
+    The ``\\begin``/``\\end`` lines themselves are outside; only the body is
+    masked.
+    """
+    mask = [False] * len(lines)
+    depth = 0
+    for i, line in enumerate(lines):
+        s = line.strip()
+        mb, me = BEGIN_RE.match(s), END_RE.match(s)
+        if me and me.group(1) in OPAQUE and depth > 0:
+            depth -= 1
+            mask[i] = False
+            continue
+        mask[i] = depth > 0
+        if mb and mb.group(1) in OPAQUE:
+            depth += 1
+    return mask
+
+
 class Project:
     """Resolved view of a LaTeX project rooted at ``root``.
 
@@ -207,7 +255,8 @@ def _excluded(path: Path, exclude: list[str]) -> bool:
 
 
 def resolve_project(root_path: str | Path,
-                    exclude: list[str] | None = None) -> Project:
+                    exclude: list[str] | None = None,
+                    encoding: str = "utf-8") -> Project:
     """Resolve a root ``.tex`` and all files it ``\\input``s / ``\\include``s.
 
     Inputs are classified preamble vs body by their position relative to
@@ -224,7 +273,7 @@ def resolve_project(root_path: str | Path,
             return
         seen.add(path)
         proj.all_files.append(path)
-        text = path.read_text(encoding="utf-8")
+        text = read_text(path, encoding)
         segments = [(text, cls)]
         if path == root:
             idx = text.find(r"\begin{document}")
@@ -244,17 +293,18 @@ def resolve_project(root_path: str | Path,
     return proj
 
 
-def detect_autonum(files: list[Path]) -> bool:
+def detect_autonum(files: list[Path], encoding: str = "utf-8") -> bool:
     """True if any file loads the ``autonum`` package."""
     pat = re.compile(r"\\(?:usepackage|RequirePackage)\b[^\n]*\{[^}]*\bautonum\b")
-    return any(pat.search(f.read_text(encoding="utf-8")) for f in files)
+    return any(pat.search(read_text(f, encoding)) for f in files)
 
 
-def collect_referenced_labels(files: list[Path]) -> set[str]:
+def collect_referenced_labels(files: list[Path],
+                              encoding: str = "utf-8") -> set[str]:
     """All label names referenced anywhere (cleveref comma-lists expanded)."""
     refs: set[str] = set()
     for f in files:
-        text = f.read_text(encoding="utf-8")
+        text = read_text(f, encoding)
         for rx in (_REF_RE, _HYPERREF_RE):
             for m in rx.finditer(text):
                 arg = m.group(1).strip()

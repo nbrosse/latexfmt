@@ -21,6 +21,7 @@ from .texutil import (
     end_outside_comment,
     findall_outside_comments,
     has_unescaped_percent,
+    opaque_mask,
     strip_toplevel_amp,
     sub_outside_comments,
     top_level_has_linebreak,
@@ -63,7 +64,14 @@ BEGIN_MATH_RE = re.compile(r"^(\s*)\\begin\{(equation\*?|align\*?)\}(.*)$")
 # Pass 1: whitespace
 # ---------------------------------------------------------------------------
 def pass_whitespace(lines: list[str]) -> list[str]:
-    return [ln.replace("\t", " ").rstrip() for ln in lines]
+    """Tabs -> spaces, strip trailing whitespace -- outside opaque environments.
+
+    Opaque bodies (tabular, verbatim, tikzpicture, ...) are hand-aligned and
+    every later pass leaves them alone; normalizing their whitespace here would
+    silently reflow tables that the pipeline promises to keep verbatim.
+    """
+    return [ln if inside else ln.replace("\t", " ").rstrip()
+            for ln, inside in zip(lines, opaque_mask(lines))]
 
 
 # ---------------------------------------------------------------------------

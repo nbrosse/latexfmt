@@ -1,84 +1,138 @@
-"""Post-format sanity checks on the produced ``.tex`` files."""
+"""Post-format sanity checks on the produced ``.tex`` files, and log scanning."""
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
-from .texutil import BEGIN_RE, END_RE, OPAQUE
+from .texutil import opaque_mask, read_text
 
 _LONE_OP = re.compile(r"^\s*[=+\-]\s*$")
 _TRAILING_WS = re.compile(r"[ \t]+$")
 _DANGLING_AMP = re.compile(r"&\s*$")
 
 
+@dataclass(frozen=True)
 class Finding:
-    def __init__(self, file: Path, line: int, kind: str, text: str):
-        self.file = file
-        self.line = line
-        self.kind = kind
-        self.text = text
+    file: Path
+    line: int
+    kind: str
+    text: str
 
     def __str__(self) -> str:
         return f"{self.file}:{self.line}: {self.kind}: {self.text.strip()[:80]}"
 
 
-def _opaque_mask(lines: list[str]) -> list[bool]:
-    """Per-line flag: True where the line sits inside an opaque environment."""
-    mask = [False] * len(lines)
-    depth = 0
-    for i, line in enumerate(lines):
-        s = line.strip()
-        opening = bool(BEGIN_RE.match(s) and BEGIN_RE.match(s).group(1) in OPAQUE)
-        closing = bool(END_RE.match(s) and END_RE.match(s).group(1) in OPAQUE)
-        if closing and depth > 0:
-            depth -= 1
-            mask[i] = True
-            continue
-        mask[i] = depth > 0
-        if opening:
-            depth += 1
-    return mask
-
-
-def check_file(path: Path, columns: int) -> list[Finding]:
+def check_file(path: Path, columns: int, encoding: str = "utf-8") -> list[Finding]:
+    """Check one formatted file. Opaque bodies are exempt from every check:
+    the pipeline deliberately leaves them byte-for-byte alone."""
     findings: list[Finding] = []
-    lines = path.read_text(encoding="utf-8").split("\n")
-    mask = _opaque_mask(lines)
+    lines = read_text(path, encoding).split("\n")
+    mask = opaque_mask(lines)
     for i, line in enumerate(lines, 1):
+        if mask[i - 1]:
+            continue
         if "\t" in line:
             findings.append(Finding(path, i, "tab", line))
         if _TRAILING_WS.search(line):
             findings.append(Finding(path, i, "trailing-whitespace", line))
         if _LONE_OP.match(line):
             findings.append(Finding(path, i, "lone-operator", line))
-        inside_opaque = mask[i - 1]
-        if not inside_opaque and _DANGLING_AMP.search(line):
+        if _DANGLING_AMP.search(line):
             findings.append(Finding(path, i, "dangling-&", line))
-        if not inside_opaque and len(line) > columns:
+        if len(line) > columns:
             findings.append(Finding(path, i, f">{columns}-cols", line))
     return findings
 
 
-def check_files(paths: list[Path], columns: int) -> list[Finding]:
+def check_files(paths: list[Path], columns: int,
+                encoding: str = "utf-8") -> list[Finding]:
     findings: list[Finding] = []
     for p in paths:
-        findings.extend(check_file(p, columns))
+        findings.extend(check_file(p, columns, encoding))
     return findings
 
 
-def scan_build_log(log_path: Path) -> tuple[int, int | None, int]:
-    """Return (undefined_or_multiply_defined_count, page_count, overfull_count).
+# ---------------------------------------------------------------------------
+# Build-log scanning
+# ---------------------------------------------------------------------------
+# TeX hard-wraps the log at max_print_line (79 by default), so a warning can be
+# split mid-sentence. Rejoin before matching, or "... undefined" is missed.
+_LOG_WIDTH = 79
 
-    ``page_count`` is None if it cannot be determined from the log.
+_REF_UNDEFINED = re.compile(
+    r"Warning:\s*(?:Hyper r|R)eference\s*[`'\"][^'\"]*['\"]?\s*[^\n]*?undefined",
+    re.IGNORECASE)
+_MULTIPLY_DEFINED = re.compile(
+    r"Warning:\s*Label\s*[`'\"][^'\"]*['\"]?\s*[^\n]*?multiply[- ]defined",
+    re.IGNORECASE)
+_CITE_UNDEFINED = re.compile(
+    r"Warning:\s*Citation\s*[`'\"][^'\"]*['\"]?\s*[^\n]*?undefined",
+    re.IGNORECASE)
+_SUMMARY_REFS = re.compile(r"There were undefined references", re.IGNORECASE)
+_SUMMARY_LABELS = re.compile(r"There were multiply-defined labels", re.IGNORECASE)
+_PAGES = re.compile(r"Output written on .*?\((\d+) page")
+_OVERFULL = re.compile(r"Overfull \\hbox")
+
+
+@dataclass(frozen=True)
+class BuildLog:
+    """What a ``latexmk`` run reported. ``pages`` is None if undeterminable."""
+
+    undefined_refs: int = 0
+    multiply_defined: int = 0
+    undefined_citations: int = 0
+    pages: int | None = None
+    overfull: int = 0
+
+    @property
+    def label_problems(self) -> int:
+        """Problems that pruning a ``\\label`` could have caused.
+
+        Undefined *citations* are excluded: they come from the bibliography and
+        are never latexfmt's doing.
+        """
+        return self.undefined_refs + self.multiply_defined
+
+
+def unwrap_log(text: str, width: int = _LOG_WIDTH) -> str:
+    """Undo TeX's hard wrap: a line of exactly ``width`` chars is continued."""
+    out: list[str] = []
+    buf = ""
+    for line in text.split("\n"):
+        buf += line
+        if len(line) < width:
+            out.append(buf)
+            buf = ""
+    if buf:
+        out.append(buf)
+    return "\n".join(out)
+
+
+def scan_build_log(log_path: Path) -> BuildLog:
+    """Summarize a LaTeX ``.log``.
+
+    Matches the specific ``LaTeX Warning:`` forms rather than the bare words
+    "undefined"/"multiply defined", which also occur in font-shape warnings,
+    package chatter and file paths.
     """
     if not log_path.is_file():
-        return (0, None, 0)
-    text = log_path.read_text(encoding="utf-8", errors="replace")
-    bad = len(re.findall(r"undefined|multiply.defined", text, re.IGNORECASE))
-    overfull = len(re.findall(r"Overfull \\hbox", text))
-    pages = None
-    m = re.findall(r"Output written on .*?\((\d+) page", text)
-    if m:
-        pages = int(m[-1])
-    return (bad, pages, overfull)
+        return BuildLog()
+    text = unwrap_log(log_path.read_text(encoding="utf-8", errors="replace"))
+    refs = len(_REF_UNDEFINED.findall(text))
+    multi = len(_MULTIPLY_DEFINED.findall(text))
+    # The end-of-run summary is authoritative: if it fired but no individual
+    # warning matched, still report one problem rather than a false all-clear.
+    if not refs and _SUMMARY_REFS.search(text):
+        refs = 1
+    if not multi and _SUMMARY_LABELS.search(text):
+        multi = 1
+    pages = [int(m) for m in _PAGES.findall(text)]
+    return BuildLog(
+        undefined_refs=refs,
+        multiply_defined=multi,
+        undefined_citations=len(_CITE_UNDEFINED.findall(text)),
+        pages=pages[-1] if pages else None,
+        overfull=len(_OVERFULL.findall(text)),
+    )
