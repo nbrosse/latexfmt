@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from latexfmt.texutil import (
     LABEL_RE,
     collect_referenced_labels,
@@ -13,6 +15,7 @@ from latexfmt.texutil import (
     strip_toplevel_amp,
     sub_outside_comments,
     top_level_row_count,
+    write_text,
 )
 
 
@@ -23,11 +26,30 @@ class TestSplitComment:
     def test_escaped_percent_is_not_a_comment(self):
         assert split_comment(r"50\% off") == (r"50\% off", "")
 
+    def test_percent_after_even_backslashes_starts_a_comment(self):
+        assert split_comment(r"line \\% comment") == (r"line \\", "% comment")
+
+    def test_percent_after_odd_backslashes_is_escaped(self):
+        assert split_comment(r"line \\\% literal") == (r"line \\\% literal", "")
+
     def test_no_comment(self):
         assert split_comment("a + b") == ("a + b", "")
 
     def test_comment_at_start(self):
         assert split_comment("% all of it") == ("", "% all of it")
+
+
+def test_atomic_write_preserves_symlink(tmp_path):
+    target = tmp_path / "target.tex"
+    link = tmp_path / "link.tex"
+    target.write_text("before\n")
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+    write_text(link, "after\n")
+    assert link.is_symlink()
+    assert target.read_text() == "after\n"
 
 
 class TestTopLevelRowCount:
@@ -127,11 +149,30 @@ class TestProjectResolution:
                            "\\begin{document}\n\\input{a}\n\\end{document}\n")
         assert len(resolve_project(root).all_files) == 3
 
+    def test_commented_input_is_not_resolved(self, tmp_path):
+        self._write(tmp_path, "dormant.tex", "must stay untouched\n")
+        live = self._write(tmp_path, "live.tex", "text\n")
+        root = self._write(tmp_path, "main.tex",
+                           "\\begin{document}\n% \\input{dormant}\n"
+                           "\\input{live}\n\\end{document}\n")
+        assert resolve_project(root).body_files == [live]
+
+    def test_input_inside_opaque_environment_is_not_resolved(self, tmp_path):
+        self._write(tmp_path, "example.tex", "must stay untouched\n")
+        root = self._write(tmp_path, "main.tex",
+                           "\\begin{document}\n\\begin{verbatim}\n"
+                           "\\input{example}\n\\end{verbatim}\n\\end{document}\n")
+        assert resolve_project(root).body_files == []
+
     def test_detect_autonum(self, tmp_path):
         plain = self._write(tmp_path, "p.tex", "\\usepackage{amsmath}\n")
         auto = self._write(tmp_path, "a.tex", "\\usepackage{autonum}\n")
         assert not detect_autonum([plain])
         assert detect_autonum([plain, auto])
+
+    def test_commented_autonum_is_ignored(self, tmp_path):
+        commented = self._write(tmp_path, "a.tex", "% \\usepackage{autonum}\n")
+        assert not detect_autonum([commented])
 
 
 class TestReferenceCollection:

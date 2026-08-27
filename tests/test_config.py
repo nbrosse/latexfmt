@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
 from latexfmt.cli import _merge, build_parser
-from latexfmt.config import Config, find_config, load_config
+from latexfmt.config import Config, find_config, load_config, validate_config
+from latexfmt.texutil import LatexfmtError
 
 
 def write(path, text):
@@ -27,8 +30,9 @@ class TestDiscovery:
         other = write(tmp_path / "other.toml", "columns = 70\n")
         assert find_config(tmp_path, str(other)) == other
 
-    def test_explicit_missing_path_returns_none(self, tmp_path):
-        assert find_config(tmp_path, str(tmp_path / "nope.toml")) is None
+    def test_explicit_missing_path_is_an_error(self, tmp_path):
+        with pytest.raises(LatexfmtError, match="config file not found"):
+            find_config(tmp_path, str(tmp_path / "nope.toml"))
 
     def test_pyproject_without_our_table_is_skipped(self, tmp_path):
         write(tmp_path / "pyproject.toml", '[project]\nname = "unrelated"\n')
@@ -63,6 +67,34 @@ class TestLoading:
                                 "columns = 80\nnot_a_real_key = 1\n"))
         assert cfg.columns == 80
         assert not hasattr(cfg, "not_a_real_key")
+
+    def test_malformed_explicit_toml_is_a_user_error(self, tmp_path):
+        path = write(tmp_path / "latexfmt.toml", "not valid = = toml\n")
+        with pytest.raises(LatexfmtError, match="invalid TOML"):
+            load_config(path)
+
+    def test_non_table_tool_configuration_is_a_user_error(self, tmp_path):
+        path = write(tmp_path / "pyproject.toml", '[tool]\nlatexfmt = "wrong"\n')
+        with pytest.raises(LatexfmtError, match="must be a table"):
+            load_config(path)
+
+
+class TestValidation:
+    @pytest.mark.parametrize("cfg", [
+        Config(columns="wide"),
+        Config(columns=0),
+        Config(indent=-1),
+        Config(build="yes"),
+        Config(exclude="*.tex"),
+        Config(exclude=[1]),
+    ])
+    def test_invalid_values_are_rejected(self, cfg):
+        with pytest.raises(LatexfmtError, match="config"):
+            validate_config(cfg)
+
+    def test_unknown_encoding_is_rejected(self):
+        with pytest.raises(LatexfmtError, match="unknown source encoding"):
+            validate_config(Config(encoding="not-a-codec"))
 
 
 class TestPrecedence:

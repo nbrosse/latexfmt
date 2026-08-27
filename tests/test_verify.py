@@ -24,6 +24,10 @@ class TestCheckFile:
         kinds = {f.kind for f in check_file(p, 100)}
         assert {"lone-operator", "dangling-&"} <= kinds
 
+    def test_escaped_and_commented_ampersands_are_not_dangling(self, tmp_path):
+        p = self._f(tmp_path, "escaped \\&\n% comment &\ntext % trailing &\n")
+        assert not any(f.kind == "dangling-&" for f in check_file(p, 100))
+
     def test_opaque_bodies_are_exempt(self, tmp_path):
         """Tabs and dangling & inside a tabular are the author's, not ours."""
         p = self._f(tmp_path,

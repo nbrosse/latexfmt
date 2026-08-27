@@ -17,6 +17,7 @@ from .config import (
     find_config,
     load_config,
     packaged_latexindent_config,
+    validate_config,
 )
 from .texutil import (
     LatexfmtError,
@@ -149,6 +150,7 @@ def _main(argv: list[str] | None) -> int:
     workdir = root.parent
     preview = args.dry_run or args.check
     cfg = _merge(load_config(find_config(workdir, args.config)), args)
+    validate_config(cfg)
 
     tools = detect_tools()
     cfg_path = Path(cfg.latexindent_config)
@@ -184,14 +186,18 @@ def _main(argv: list[str] | None) -> int:
 
     changed: list[Path] = []
     all_removed: list[str] = []
+    prepared: list[tuple[Path, str, str]] = []
 
     for path, minimal in targets:
         original = read_text(path, cfg.encoding)
-        new, removed = transform_text(
-            original, refs=refs, autonum=autonum, columns=cfg.columns,
-            indent=cfg.indent, wrap_comments=cfg.wrap_comments,
-            prune_labels=cfg.prune_labels, minimal=minimal,
-        )
+        try:
+            new, removed = transform_text(
+                original, refs=refs, autonum=autonum, columns=cfg.columns,
+                indent=cfg.indent, wrap_comments=cfg.wrap_comments,
+                prune_labels=cfg.prune_labels, minimal=minimal,
+            )
+        except LatexfmtError as exc:
+            raise LatexfmtError(f"{path}: {exc}") from exc
         if use_latexindent and not minimal:
             li = _run_latexindent(new, cfg_path, tools.latexindent)
             if li is None:
@@ -202,22 +208,49 @@ def _main(argv: list[str] | None) -> int:
         if new == original:
             continue
         changed.append(path)
-        if preview:
-            if args.dry_run:
-                sys.stdout.writelines(difflib.unified_diff(
-                    original.splitlines(True), new.splitlines(True),
-                    fromfile=str(path), tofile=str(path) + " (formatted)"))
-        else:
-            if cfg.backup:
-                write_text(path.with_suffix(path.suffix + ".orig"), original,
-                           cfg.encoding)
-            write_text(path, new, cfg.encoding)
-
-    status = _report(cfg, targets, changed, all_removed, autonum, preview,
-                     warnings, tools, root, workdir)
+        prepared.append((path, original, new))
+        if preview and args.dry_run:
+            sys.stdout.writelines(difflib.unified_diff(
+                original.splitlines(True), new.splitlines(True),
+                fromfile=str(path), tofile=str(path) + " (formatted)"))
     if preview:
+        _report(cfg, targets, changed, all_removed, autonum, preview,
+                warnings, tools, root, workdir)
         return EXIT_WOULD_CHANGE if changed else EXIT_OK
+
+    if cfg.backup:
+        for path, original, _ in prepared:
+            write_text(path.with_suffix(path.suffix + ".orig"), original,
+                       cfg.encoding)
+
+    written: list[tuple[Path, str, str]] = []
+    try:
+        for update in prepared:
+            path, _, new = update
+            write_text(path, new, cfg.encoding)
+            written.append(update)
+        status = _report(cfg, targets, changed, all_removed, autonum, preview,
+                         warnings, tools, root, workdir)
+    except (Exception, KeyboardInterrupt):
+        _restore_sources(written, cfg.encoding)
+        raise
+    if status != EXIT_OK and written:
+        _restore_sources(written, cfg.encoding)
+        print(f"  ! verification failed -> restored {len(written)} source file(s)")
     return status
+
+
+def _restore_sources(updates: list[tuple[Path, str, str]], encoding: str) -> None:
+    """Best-effort rollback of already-written source files."""
+    errors: list[LatexfmtError] = []
+    for path, original, _ in reversed(updates):
+        try:
+            write_text(path, original, encoding)
+        except LatexfmtError as exc:
+            errors.append(exc)
+    if errors:
+        raise LatexfmtError(
+            f"rollback failed for {len(errors)} source file(s): {errors[0]}")
 
 
 def _report(cfg, targets, changed, removed, autonum, preview, warnings, tools,

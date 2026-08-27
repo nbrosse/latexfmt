@@ -6,9 +6,13 @@ latexmk, no Perl latexindent, no TeX installation required.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
-from latexfmt.cli import EXIT_OK, EXIT_USAGE, EXIT_WOULD_CHANGE, main
+import latexfmt.cli as cli
+from latexfmt.cli import EXIT_FAILED, EXIT_OK, EXIT_USAGE, EXIT_WOULD_CHANGE, main
+from latexfmt.config import Tools
 
 HERMETIC = ["--no-build", "--no-latexindent"]
 
@@ -107,3 +111,41 @@ def test_preview_modes_never_write(project, flag):
     root = project(UNFORMATTED)
     assert run(root, flag) == EXIT_WOULD_CHANGE
     assert project.body.read_text() == UNFORMATTED
+
+
+def test_failed_build_restores_original_sources(project, monkeypatch, capsys):
+    root = project(UNFORMATTED)
+    monkeypatch.setattr(cli, "detect_tools",
+                        lambda: Tools(latexindent=None, latexmk="latexmk"))
+    monkeypatch.setattr(cli.subprocess, "run",
+                        lambda *a, **kw: SimpleNamespace(returncode=1))
+    assert main([str(root), "--no-latexindent"]) == EXIT_FAILED
+    assert project.body.read_text() == UNFORMATTED
+    assert "restored 1 source file" in capsys.readouterr().out
+
+
+def test_transform_error_does_not_partially_write_project(tmp_path, capsys):
+    root = tmp_path / "main.tex"
+    first = tmp_path / "first.tex"
+    second = tmp_path / "second.tex"
+    root.write_text("\\begin{document}\n\\input{first}\n\\input{second}\n"
+                    "\\end{document}\n")
+    first.write_text(UNFORMATTED)
+    second.write_text("\\begin{align}\na &= b\n")
+    assert main([str(root), *HERMETIC]) == EXIT_USAGE
+    assert first.read_text() == UNFORMATTED
+    assert "unterminated" in capsys.readouterr().err
+
+
+def test_missing_explicit_config_is_reported(project, tmp_path, capsys):
+    root = project(FORMATTED)
+    assert run(root, "--config", str(tmp_path / "missing.toml")) == EXIT_USAGE
+    assert "config file not found" in capsys.readouterr().err
+
+
+def test_invalid_config_type_is_reported_without_traceback(project, tmp_path, capsys):
+    root = project(FORMATTED)
+    config = tmp_path / "bad.toml"
+    config.write_text('columns = "wide"\n')
+    assert run(root, "--config", str(config)) == EXIT_USAGE
+    assert "columns must be a positive integer" in capsys.readouterr().err

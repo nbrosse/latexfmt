@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import codecs
 import shutil
 import tomllib
 from dataclasses import dataclass, field, fields
 from importlib import resources
 from pathlib import Path
+
+from .texutil import LatexfmtError
 
 
 @dataclass
@@ -36,10 +39,11 @@ def _read_toml_table(path: Path) -> dict:
     """
     with path.open("rb") as fh:
         data = tomllib.load(fh)
+    tool = data.get("tool", {})
     if path.name == "pyproject.toml":
-        return data.get("tool", {}).get("latexfmt", {})
-    if "tool" in data and "latexfmt" in data.get("tool", {}):
-        return data["tool"]["latexfmt"]
+        return tool.get("latexfmt", {}) if isinstance(tool, dict) else {}
+    if isinstance(tool, dict) and "latexfmt" in tool:
+        return tool["latexfmt"]
     return data
 
 
@@ -48,7 +52,9 @@ def find_config(start: Path, explicit: str | None) -> Path | None:
     ``pyproject.toml`` walking up from ``start``."""
     if explicit:
         p = Path(explicit)
-        return p if p.is_file() else None
+        if not p.is_file():
+            raise LatexfmtError(f"config file not found: {p}")
+        return p
     for d in [start, *start.parents]:
         for name in ("latexfmt.toml", "pyproject.toml"):
             cand = d / name
@@ -65,11 +71,45 @@ def load_config(config_path: Path | None) -> Config:
     cfg = Config()
     if config_path is None:
         return cfg
-    table = _read_toml_table(config_path)
+    try:
+        table = _read_toml_table(config_path)
+    except tomllib.TOMLDecodeError as exc:
+        raise LatexfmtError(f"invalid TOML in {config_path}: {exc}") from exc
+    except OSError as exc:
+        raise LatexfmtError(f"cannot read config {config_path}: {exc}") from exc
+    if not isinstance(table, dict):
+        raise LatexfmtError(f"latexfmt configuration in {config_path} must be a table")
     for key, value in table.items():
         if key in _KEYS:
             setattr(cfg, key, value)
     return cfg
+
+
+def validate_config(cfg: Config) -> None:
+    """Reject invalid config values before any project files are processed."""
+    for name in ("columns", "indent"):
+        value = getattr(cfg, name)
+        if type(value) is not int or value < (1 if name == "columns" else 0):
+            requirement = (
+                "a positive integer" if name == "columns"
+                else "a non-negative integer"
+            )
+            raise LatexfmtError(f"config {name} must be {requirement}")
+    for name in ("prune_labels", "wrap_comments", "build", "latexindent",
+                 "strict", "all", "backup"):
+        if type(getattr(cfg, name)) is not bool:
+            raise LatexfmtError(f"config {name} must be a boolean")
+    for name in ("latexindent_config", "encoding"):
+        value = getattr(cfg, name)
+        if not isinstance(value, str) or not value:
+            raise LatexfmtError(f"config {name} must be a non-empty string")
+    if not isinstance(cfg.exclude, list) or not all(
+            isinstance(item, str) for item in cfg.exclude):
+        raise LatexfmtError("config exclude must be an array of strings")
+    try:
+        codecs.lookup(cfg.encoding)
+    except LookupError as exc:
+        raise LatexfmtError(f"unknown source encoding: {cfg.encoding}") from exc
 
 
 @dataclass

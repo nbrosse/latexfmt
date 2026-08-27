@@ -6,11 +6,16 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .texutil import opaque_mask, read_text
+from .texutil import is_escaped, opaque_mask, read_text, split_comment
 
 _LONE_OP = re.compile(r"^\s*[=+\-]\s*$")
 _TRAILING_WS = re.compile(r"[ \t]+$")
-_DANGLING_AMP = re.compile(r"&\s*$")
+
+
+def _has_dangling_amp(code: str) -> bool:
+    stripped = code.rstrip()
+    return bool(stripped) and stripped[-1] == "&" and not is_escaped(
+        stripped, len(stripped) - 1)
 
 
 @dataclass(frozen=True)
@@ -33,13 +38,14 @@ def check_file(path: Path, columns: int, encoding: str = "utf-8") -> list[Findin
     for i, line in enumerate(lines, 1):
         if mask[i - 1]:
             continue
+        code, _ = split_comment(line)
         if "\t" in line:
             findings.append(Finding(path, i, "tab", line))
         if _TRAILING_WS.search(line):
             findings.append(Finding(path, i, "trailing-whitespace", line))
-        if _LONE_OP.match(line):
+        if _LONE_OP.match(code):
             findings.append(Finding(path, i, "lone-operator", line))
-        if _DANGLING_AMP.search(line):
+        if _has_dangling_amp(code):
             findings.append(Finding(path, i, "dangling-&", line))
         if len(line) > columns:
             findings.append(Finding(path, i, f">{columns}-cols", line))

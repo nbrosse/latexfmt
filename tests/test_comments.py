@@ -1,5 +1,8 @@
 """Comments inside display math must survive formatting (regression)."""
 
+import pytest
+
+from latexfmt.texutil import LatexfmtError
 from latexfmt.transform import transform_text
 
 REFS = {"eq:used"}
@@ -75,3 +78,27 @@ def test_referenced_label_still_hoisted_and_dead_label_still_pruned():
     assert "eq:dead" in removed
     assert "\\label{eq:used}" in out
     assert "\\label{eq:dead}" not in out
+
+
+def test_wrapped_comments_keep_a_marker_on_every_line():
+    out = fmt("% " + "word " * 20 + "\n", columns=20, wrap_comments=True)
+    assert len(out.splitlines()) > 1
+    assert all(line.startswith("% ") for line in out.splitlines())
+    assert fmt(out, columns=20, wrap_comments=True) == out
+
+
+def test_trailing_comment_is_not_reflowed_into_live_text():
+    source = "Code. % " + "word " * 20 + "\nFollowing prose.\n"
+    assert fmt(source, columns=20, wrap_comments=True).splitlines()[0] == \
+        source.splitlines()[0].rstrip()
+
+
+def test_same_line_math_environment_is_handled():
+    out = fmt("\\begin{align} a &= b \\end{align} After.\n")
+    assert out == ("\\begin{equation}\n  a = b\n\\end{equation}\nAfter.\n")
+    assert fmt(out) == out
+
+
+def test_unterminated_math_environment_is_rejected():
+    with pytest.raises(LatexfmtError, match="unterminated"):
+        fmt("\\begin{align}\n  a &= b\nAfter.\n")

@@ -63,3 +63,14 @@ def test_idempotent(case: pathlib.Path):
     once, _ = _run(case, (case / "in.tex").read_text())
     twice, _ = _run(case, once)
     assert twice == once, f"{case.name} is not idempotent"
+
+
+def test_starred_math_body_is_standardized():
+    source = ("\\begin{equation*}\n"
+              "  a = b + c + d + e + f + g\n"
+              "\\end{equation*}\n")
+    out, _ = transform_text(source, refs=set(), autonum=False, columns=20)
+    assert out == ("\\begin{equation*}\n"
+                   "  a = b + c + d + e\n"
+                   "  + f + g\n"
+                   "\\end{equation*}\n")

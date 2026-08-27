@@ -3,17 +3,35 @@
 `latexfmt` formats a LaTeX project to a set of house conventions. Point it at a
 root `.tex`; it resolves every `\input`/`\include` and formats the body files.
 
-## Usage
+## Installation
 
-The tool is not installed globally — run it from the target LaTeX project with
-`uv run --project` (or `uvx --from`) pointing at this repo:
+`latexfmt` requires Python 3.13 or newer. Install the command directly from the
+Git repository into an isolated `uv` tool environment:
+
+```console
+uv tool install git+https://github.com/nbrosse/latexfmt.git
+latexfmt --version
+```
+
+Re-run the install with `--reinstall`, for example
+`uv tool install --reinstall git+https://github.com/nbrosse/latexfmt.git@dev`,
+to replace an existing installation. If `uv` reports that its executable
+directory is missing from `PATH`, run `uv tool update-shell` once.
+
+For development without installation, point `uv run --project` or `uvx --from`
+at a local checkout.
+
+## Usage
 
 ```console
 # from the LaTeX project directory
-uv run --project /path/to/latexfmt latexfmt main.tex             # format + verify (latexmk)
-uv run --project /path/to/latexfmt latexfmt main.tex --dry-run   # unified diff, change nothing
-uv run --project /path/to/latexfmt latexfmt main.tex --check     # summary only, exit 1 if it would change
-uvx --from /path/to/latexfmt latexfmt main.tex                   # equivalent, no project needed
+latexfmt main.tex             # format + verify with latexmk
+latexfmt main.tex --dry-run   # unified diff, change nothing
+latexfmt main.tex --check     # summary only, exit 1 if it would change
+
+# development checkout alternatives
+uv run --project /path/to/latexfmt latexfmt main.tex
+uvx --from /path/to/latexfmt latexfmt main.tex
 ```
 
 ### Exit codes
@@ -27,6 +45,10 @@ uvx --from /path/to/latexfmt latexfmt main.tex                   # equivalent, n
 
 `--check` follows the `black`/`ruff` convention, so `latexfmt main.tex --check`
 works directly in CI or a pre-commit hook.
+
+All transformations are prepared before the first write, individual writes
+replace files atomically, and a strict-verification or `latexmk` failure restores
+the original sources. TeX build artifacts are not rolled back.
 
 ## What it does
 
@@ -46,9 +68,11 @@ Opaque environments — `tabular`, `tabularx`, `longtable`, `verbatim`,
 by every pass, and are exempt from the verify checks. Hand-aligned tables keep
 their tabs.
 
-Comments are preserved everywhere, including inside display math. A commented-out
-`\label` is never pruned nor promoted to a live one, and a `\\`, `&` or
-`\end{...}` inside a comment never changes how a block is parsed.
+Comments are preserved everywhere, including inside display math. With
+`--wrap-comments`, only full-line comment paragraphs are reflowed and every
+continuation line retains its `%` marker; trailing comments remain untouched. A
+commented-out `\label` is never pruned nor promoted to a live one, and a `\\`,
+`&` or `\end{...}` inside a comment never changes how a block is parsed.
 
 Missing `latexindent`/`latexmk` are detected and skipped with a warning (the
 built-in Python indentation is used as a fallback).
@@ -63,18 +87,53 @@ override the config file, which overrides the built-in defaults. See
 
 ## Configuration
 
-`latexfmt` looks for `latexfmt.toml` (or a `[tool.latexfmt]` table in
-`pyproject.toml`) by walking **up from the directory containing the root `.tex`**
-— not from the current working directory, and not from this repo. Pass
-`--config` to point at one explicitly. `latexindent_config` inside
-`latexfmt.toml` is likewise resolved relative to the root `.tex`'s directory.
+Installing the tool does not install a project configuration. Put a
+`latexfmt.toml` in the LaTeX project, normally beside `main.tex`:
+
+```toml
+columns = 100
+indent = 2
+encoding = "utf-8"
+prune_labels = true
+wrap_comments = false
+build = true
+latexindent = true
+latexindent_config = ".latexindent.yaml"
+strict = false
+all = false
+backup = false
+exclude = ["*_old*", "*sections_old*"]
+```
+
+The same keys can instead live under `[tool.latexfmt]` in a project's
+`pyproject.toml`:
+
+```toml
+[tool.latexfmt]
+columns = 100
+indent = 2
+build = true
+```
+
+Configuration precedence is: CLI flags, then the project configuration, then
+built-in defaults. `latexfmt` discovers a configuration by walking upward from
+the directory containing the root `.tex`; discovery does not start from the
+shell's current directory or from the installed package. Pass
+`--config /path/to/config.toml` to select a file explicitly. A missing explicit
+file or an invalid value is reported as an error before source files are
+processed.
+
+`latexindent_config` names a separate YAML configuration consumed by
+`latexindent`; a relative path is resolved from the root `.tex` directory. It
+does not refer to `latexfmt.toml` itself.
 
 If no `.latexindent.yaml` is found, latexfmt falls back to the copy bundled in
-the package and says so in the summary. This matters: run without a config,
-`latexindent` applies *its* defaults — tab indentation, `&` column re-padding,
-no protected verbatim/tikz/tabular — which undo latexfmt's earlier passes. The
-`.latexindent.yaml` in this repo is an identical copy of the bundled one, kept
-around so you can drop it into a project and edit it.
+the installed package and says so in the summary. This matters because running
+`latexindent` without that YAML would apply its own defaults—tab indentation,
+`&` column re-padding, and no protected verbatim/tikz/tabular environments—which
+would undo earlier formatting passes. The `.latexindent.yaml` in this repository
+matches the bundled copy and can be copied into a project when customization is
+needed.
 
 ## Relation to `latexindent` and `tex-fmt`
 
@@ -100,7 +159,7 @@ that tradeoff is worth wiring up, `latexfmt` stays on `latexindent`.
 
 ```console
 uv sync            # install with dev dependencies
-uv run pytest      # 112 hermetic tests, plus 4 integration tests if TeX is installed
+uv run pytest      # 137 hermetic tests, plus 4 integration tests if TeX is installed
 uv run ruff check .
 ```
 

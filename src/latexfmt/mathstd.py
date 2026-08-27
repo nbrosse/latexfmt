@@ -27,11 +27,13 @@ from .texutil import (
     NESTED_MATH,
     OPAQUE,
     ROW_SEP_RE,
+    LatexfmtError,
     end_outside_comment,
     has_unescaped_percent,
+    is_escaped,
 )
 
-BLOCK_BEGIN_RE = re.compile(r"^(\s*)\\begin\{(equation|align)\}(.*)$")
+BLOCK_BEGIN_RE = re.compile(r"^(\s*)\\begin\{(equation\*?|align\*?)\}(.*)$")
 
 OP_CHAR = set("=+-<>")
 OP_MACRO = {
@@ -93,7 +95,7 @@ def _resplit_operators(chunk: str) -> list[str]:
             i = me.end()
             continue
         c = s[i]
-        if c == "%" and (i == 0 or s[i - 1] != "\\"):
+        if c == "%" and not is_escaped(s, i):
             buf += s[i:]
             break
         if c == " " and braced == 0 and envd == 0:
@@ -105,9 +107,9 @@ def _resplit_operators(chunk: str) -> list[str]:
                 buf = ""
                 i = j
                 continue
-        if c == "{" and (i == 0 or s[i - 1] != "\\"):
+        if c == "{" and not is_escaped(s, i):
             braced += 1
-        elif c == "}" and (i == 0 or s[i - 1] != "\\"):
+        elif c == "}" and not is_escaped(s, i):
             braced -= 1
         buf += c
         i += 1
@@ -167,7 +169,7 @@ def _split_rows(body_lines: list[str]) -> list[tuple[list[str], str]]:
                 i = me.end()
                 continue
             c = s[i]
-            if c == "%" and (i == 0 or s[i - 1] != "\\"):
+            if c == "%" and not is_escaped(s, i):
                 buf += s[i:]
                 i = n
                 break
@@ -184,9 +186,9 @@ def _split_rows(body_lines: list[str]) -> list[tuple[list[str], str]]:
                 buf += sep.group(0)
                 i = sep.end()
                 continue
-            if c == "{" and (i == 0 or s[i - 1] != "\\"):
+            if c == "{" and not is_escaped(s, i):
                 braced += 1
-            elif c == "}" and (i == 0 or s[i - 1] != "\\"):
+            elif c == "}" and not is_escaped(s, i):
                 braced -= 1
             buf += c
             i += 1
@@ -286,6 +288,8 @@ def standardize(lines: list[str], width: int = 100) -> list[str]:
                     break
                 body_lines.append(lines[j])
                 j += 1
+            if j >= n:
+                raise LatexfmtError(f"unterminated \\begin{{{env}}}")
             body_indent = len(indent) + 2
             rows = _split_rows(body_lines)
             out.append(begin_line)

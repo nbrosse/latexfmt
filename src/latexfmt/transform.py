@@ -18,6 +18,7 @@ from .texutil import (
     LABEL_RE,
     MATH,
     OPAQUE,
+    LatexfmtError,
     end_outside_comment,
     findall_outside_comments,
     has_unescaped_percent,
@@ -100,17 +101,25 @@ def pass_convert(lines: list[str], autonum: bool, refs: set[str],
         db = re.match(r"^(\s*)\\\[\s*(.*)$", line)
         if mb:
             indent, env, rest = mb.group(1), mb.group(2), mb.group(3)
-            block = [rest]
-            j = i + 1
-            tail = ""
-            while j < n:
-                em = end_outside_comment(lines[j], env)
-                if em:
-                    block.append(em[0])
-                    tail = em[1]
-                    break
-                block.append(lines[j])
-                j += 1
+            same_line_end = end_outside_comment(rest, env)
+            if same_line_end:
+                block = [same_line_end[0]]
+                tail = same_line_end[1]
+                j = i
+            else:
+                block = [rest]
+                j = i + 1
+                tail = ""
+                while j < n:
+                    em = end_outside_comment(lines[j], env)
+                    if em:
+                        block.append(em[0])
+                        tail = em[1]
+                        break
+                    block.append(lines[j])
+                    j += 1
+                if j >= n:
+                    raise LatexfmtError(f"unterminated \\begin{{{env}}}")
             body = "\n".join(block)
             multiline = top_level_row_count(body) > 1
             target = _target_env(env, multiline, autonum)
@@ -127,6 +136,8 @@ def pass_convert(lines: list[str], autonum: bool, refs: set[str],
             while j < n and lines[j].strip() != "\\]":
                 block.append(lines[j])
                 j += 1
+            if j >= n:
+                raise LatexfmtError("unterminated \\[")
             body = "\n".join(block)
             multiline = top_level_row_count(body) > 1
             target = _target_env("[", multiline, autonum)
@@ -249,7 +260,9 @@ def is_structural(s: str, wrap_comments: bool) -> bool:
         return True
     if "\\begin{" in s or "\\end{" in s:
         return True
-    if not wrap_comments and has_unescaped_percent(s):
+    # Only full-line comments are safe to reflow. Moving text after a trailing
+    # comment can turn it into live LaTeX on continuation lines.
+    if has_unescaped_percent(s) and (not wrap_comments or not s.startswith("%")):
         return True
     if s in ("\\[", "\\]"):
         return True
@@ -266,17 +279,17 @@ def is_structural(s: str, wrap_comments: bool) -> bool:
     return False
 
 
-def _wrap(text: str, width: int, indent: int) -> list[str]:
+def _wrap(text: str, width: int, indent: int, prefix: str = "") -> list[str]:
     pad = " " * indent
     words = [w for w in text.split(" ") if w != ""]
     if not words:
         return []
-    lines = [pad + words[0]]
+    lines = [pad + prefix + words[0]]
     for w in words[1:]:
         if len(lines[-1]) + 1 + len(w) <= width:
             lines[-1] += " " + w
         else:
-            lines.append(pad + w)
+            lines.append(pad + prefix + w)
     return lines
 
 
@@ -286,12 +299,13 @@ def pass_reflow(lines: list[str], columns: int, wrap_comments: bool,
     stack: list[dict] = []
     para: list[str] = []
     para_indent = [0]
+    para_prefix = [""]
 
     def flush() -> None:
         if not para:
             return
         text = re.sub(r"\s+", " ", " ".join(p.strip() for p in para)).strip()
-        out.extend(_wrap(text, columns, para_indent[0]))
+        out.extend(_wrap(text, columns, para_indent[0], para_prefix[0]))
         para.clear()
 
     for line in lines:
@@ -309,14 +323,23 @@ def pass_reflow(lines: list[str], columns: int, wrap_comments: bool,
             out.append(line)
             _update_stack(stack, s, indent)
             continue
+        comment = re.match(r"^(%+\s?)(.*)$", s) if wrap_comments else None
+        prefix = comment.group(1) if comment else ""
+        content = comment.group(2) if comment else s
         # Reflowable prose: wrap indent comes from the line's actual leading
         # whitespace (already set by pass_indent), so it is correct for any step.
         lead = len(line) - len(line.lstrip(" "))
-        if para and lead != para_indent[0]:
+        if para and (lead != para_indent[0] or prefix != para_prefix[0]):
             flush()
         if not para:
             para_indent[0] = lead
-        para.append(s)
+            para_prefix[0] = prefix
+        # Empty comment lines are paragraph boundaries and must remain comments.
+        if comment and not content:
+            flush()
+            out.append(" " * lead + prefix.rstrip())
+            continue
+        para.append(content)
     flush()
     return out
 

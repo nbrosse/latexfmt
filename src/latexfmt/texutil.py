@@ -4,8 +4,12 @@ utilities, project input resolution, autonum detection and reference scanning.
 
 from __future__ import annotations
 
+import codecs
 import fnmatch
+import os
 import re
+import tempfile
+from contextlib import suppress
 from pathlib import Path
 
 BEGIN_RE = re.compile(r"\\begin\{([^}]*)\}")
@@ -60,10 +64,44 @@ def read_text(path: Path, encoding: str = "utf-8") -> str:
 
 
 def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Atomically replace ``path`` with ``text``, preserving its mode.
+
+    Writing through a sibling temporary file prevents an interrupted formatter
+    from leaving a truncated source file behind.
+    """
+    tmp_path: Path | None = None
     try:
-        path.write_text(text, encoding=encoding)
-    except (OSError, UnicodeEncodeError) as exc:
+        codecs.lookup(encoding)
+        # Replacing a symlink path would destroy the link. Replace its resolved
+        # target instead, matching Path.write_text's existing follow-link behavior.
+        target = path.resolve() if path.is_symlink() else path
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp",
+                                        dir=target.parent)
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if target.exists():
+            tmp_path.chmod(target.stat().st_mode)
+        tmp_path.replace(target)
+        tmp_path = None
+    except (LookupError, OSError, UnicodeEncodeError) as exc:
         raise LatexfmtError(f"{path}: cannot write ({exc})") from exc
+    finally:
+        if tmp_path is not None:
+            with suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+
+
+def is_escaped(text: str, index: int) -> bool:
+    """Whether ``text[index]`` follows an odd run of backslashes."""
+    backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
 
 
 def split_comment(line: str) -> tuple[str, str]:
@@ -73,7 +111,7 @@ def split_comment(line: str) -> tuple[str, str]:
     """
     i = 0
     while i < len(line):
-        if line[i] == "%" and (i == 0 or line[i - 1] != "\\"):
+        if line[i] == "%" and not is_escaped(line, i):
             return line[:i], line[i:]
         i += 1
     return line, ""
@@ -114,7 +152,7 @@ def _skip_comment(s: str, i: int) -> int:
 def has_unescaped_percent(s: str) -> bool:
     i = 0
     while i < len(s):
-        if s[i] == "%" and (i == 0 or s[i - 1] != "\\"):
+        if s[i] == "%" and not is_escaped(s, i):
             return True
         i += 1
     return False
@@ -161,7 +199,7 @@ def top_level_row_count(body: str) -> int:
             i = m.end()
             continue
         c = s[i]
-        if c == "%" and (i == 0 or s[i - 1] != "\\"):
+        if c == "%" and not is_escaped(s, i):
             i = _skip_comment(s, i)  # a \\ inside a comment is not a row break
             continue
         if c == "\\" and i + 1 < n and s[i + 1] == "\\":
@@ -172,9 +210,9 @@ def top_level_row_count(body: str) -> int:
                 rows[-1] += m.group(0)
             i = m.end()
             continue
-        if c == "{" and (i == 0 or s[i - 1] != "\\"):
+        if c == "{" and not is_escaped(s, i):
             braced += 1
-        elif c == "}" and (i == 0 or s[i - 1] != "\\"):
+        elif c == "}" and not is_escaped(s, i):
             braced -= 1
         rows[-1] += c
         i += 1
@@ -201,17 +239,17 @@ def strip_toplevel_amp(body: str) -> str:
             i = m.end()
             continue
         c = s[i]
-        if c == "%" and (i == 0 or s[i - 1] != "\\"):
+        if c == "%" and not is_escaped(s, i):
             end = _skip_comment(s, i)  # copy the comment through untouched
             out.append(s[i:end])
             i = end
             continue
-        if c == "&" and braced == 0 and envd == 0 and (i == 0 or s[i - 1] != "\\"):
+        if c == "&" and braced == 0 and envd == 0 and not is_escaped(s, i):
             i += 1
             continue
-        if c == "{" and (i == 0 or s[i - 1] != "\\"):
+        if c == "{" and not is_escaped(s, i):
             braced += 1
-        elif c == "}" and (i == 0 or s[i - 1] != "\\"):
+        elif c == "}" and not is_escaped(s, i):
             braced -= 1
         out.append(c)
         i += 1
@@ -272,6 +310,26 @@ def _excluded(path: Path, exclude: list[str]) -> bool:
                for pat in exclude)
 
 
+def _visible_code(text: str, *, mask_opaque: bool = True) -> str:
+    """Return position-preserving source with comments/opaque bodies blanked.
+
+    Keeping line lengths unchanged lets callers use match offsets against this
+    view while ensuring inactive ``\\input`` and package commands are ignored.
+    """
+    lines = text.splitlines(keepends=True)
+    bodies = [line.rstrip("\r\n") for line in lines]
+    mask = opaque_mask(bodies) if mask_opaque else [False] * len(lines)
+    visible: list[str] = []
+    for line, body, inside in zip(lines, bodies, mask, strict=True):
+        ending = line[len(body):]
+        if inside:
+            visible.append(" " * len(body) + ending)
+            continue
+        code, _ = split_comment(body)
+        visible.append(code + " " * (len(body) - len(code)) + ending)
+    return "".join(visible)
+
+
 def resolve_project(root_path: str | Path,
                     exclude: list[str] | None = None,
                     encoding: str = "utf-8") -> Project:
@@ -291,7 +349,7 @@ def resolve_project(root_path: str | Path,
             return
         seen.add(path)
         proj.all_files.append(path)
-        text = read_text(path, encoding)
+        text = _visible_code(read_text(path, encoding))
         segments = [(text, cls)]
         if path == root:
             idx = text.find(r"\begin{document}")
@@ -314,7 +372,7 @@ def resolve_project(root_path: str | Path,
 def detect_autonum(files: list[Path], encoding: str = "utf-8") -> bool:
     """True if any file loads the ``autonum`` package."""
     pat = re.compile(r"\\(?:usepackage|RequirePackage)\b[^\n]*\{[^}]*\bautonum\b")
-    return any(pat.search(read_text(f, encoding)) for f in files)
+    return any(pat.search(_visible_code(read_text(f, encoding))) for f in files)
 
 
 def collect_referenced_labels(files: list[Path],
