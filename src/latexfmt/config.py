@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 import tomllib
+from importlib import resources
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 
@@ -78,3 +79,14 @@ class Tools:
 def detect_tools() -> Tools:
     return Tools(latexindent=shutil.which("latexindent"),
                  latexmk=shutil.which("latexmk"))
+
+
+def packaged_latexindent_config() -> Path:
+    """Path to the ``.latexindent.yaml`` shipped with latexfmt.
+
+    Used as a fallback: without a config, ``latexindent`` runs with *its* own
+    defaults (tab indent, ``&`` re-padding, no protected environments), which
+    undoes latexfmt's earlier passes and produces output that latexfmt's own
+    verifier then flags.
+    """
+    return Path(str(resources.files("latexfmt") / "data" / "latexindent.yaml"))

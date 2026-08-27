@@ -9,7 +9,13 @@ import sys
 import tempfile
 from pathlib import Path
 
-from .config import Config, detect_tools, find_config, load_config
+from .config import (
+    Config,
+    detect_tools,
+    find_config,
+    load_config,
+    packaged_latexindent_config,
+)
 from .texutil import (
     collect_referenced_labels,
     detect_autonum,
@@ -126,6 +132,14 @@ def main(argv: list[str] | None = None) -> int:
     if cfg.latexindent and tools.latexindent is None:
         warnings.append("latexindent not found on PATH -> skipping (Python "
                         "indentation used instead)")
+    if use_latexindent and not cfg_path.is_file():
+        # Without a config latexindent applies its own defaults (tab indent,
+        # '&' re-padding, no protected verbatim/tikz/tabular), undoing earlier
+        # passes. Fall back to the copy shipped with latexfmt.
+        fallback = packaged_latexindent_config()
+        warnings.append(f"latexindent config not found: {cfg_path} -> using "
+                        f"latexfmt's bundled defaults ({fallback})")
+        cfg_path = fallback
 
     changed: list[Path] = []
     all_removed: list[str] = []
