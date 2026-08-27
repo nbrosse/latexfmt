@@ -1,0 +1,13 @@
+# latexfmt configuration. CLI flags override these; these override built-in
+# defaults. A [tool.latexfmt] table in pyproject.toml works too.
+
+columns = 100                     # prose/math wrap width
+indent = 2                        # spaces per environment nesting level
+prune_labels = true               # drop \label{...} nothing references
+wrap_comments = false             # also rewrap %-comment paragraphs
+build = true                      # run latexmk afterwards to verify
+latexindent = true                # finalize indentation with latexindent
+latexindent_config = ".latexindent.yaml"
+all = false                       # also format the root + preamble files
+backup = false                    # write <file>.orig before overwriting
+exclude = ["*_old*", "*sections_old*"]

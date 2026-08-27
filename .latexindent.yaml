@@ -1,0 +1,63 @@
+# latexindent default configuration.
+# Run e.g.:  latexindent -l .latexindent.yaml -w -s <file>.tex
+#
+# Conventions enforced:
+#   * 2-space indent per environment nesting level;
+#   * proof bodies flush-left (no additional indent);
+#   * '&' columns in display math are NOT re-padded (equation bodies are
+#     already standardized to <=100 columns; tabular tables keep the default).
+defaultIndent: "  "
+
+noAdditionalIndent:
+  proof: 1
+
+# Indent from \begin/\end environments only. Command arguments and bare
+# brace/bracket groups are NOT used for indentation: math intervals such as
+# "\times[0,\varepsilon)" otherwise look like an unclosed optional argument and
+# cascade spurious indentation.
+noAdditionalIndentGlobal:
+  commands: 1
+  optionalArguments: 1
+  mandatoryArguments: 1
+  namedGroupingBracesBrackets: 1
+  UnNamedGroupingBracesBrackets: 1
+  keyEqualsValuesBracesBrackets: 1
+
+# Item bodies stay at the list-body level (no hanging alignment under \item).
+indentAfterItems:
+  enumerate: 0
+  itemize: 0
+  description: 0
+
+# Do not re-pad '&' columns anywhere: equation bodies are already standardized,
+# and matrices/cases stay compact (no injected column spacing).
+lookForAlignDelims:
+  align: 0
+  align*: 0
+  alignat: 0
+  alignat*: 0
+  flalign: 0
+  flalign*: 0
+  eqnarray: 0
+  array: 0
+  matrix: 0
+  bmatrix: 0
+  pmatrix: 0
+  vmatrix: 0
+  Vmatrix: 0
+  Bmatrix: 0
+  smallmatrix: 0
+  cases: 0
+  aligned: 0
+  split: 0
+  gathered: 0
+  tabular: 0
+  tabularx: 0
+
+# Leave hand-formatted figures and tables exactly as-is.
+verbatimEnvironments:
+  tikzpicture: 1
+  tabularx: 1
+  tabular: 1
+  verbatim: 1
+  lstlisting: 1
