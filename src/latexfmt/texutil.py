@@ -133,9 +133,17 @@ def end_outside_comment(line: str, env: str) -> tuple[str, str] | None:
     return m.group(1), m.group(2) + comment
 
 
-def top_level_has_linebreak(body: str) -> bool:
-    """True if ``body`` contains a ``\\\\`` at brace- and nested-env-depth 0
-    (ignoring ``\\\\[`` spacing rows)."""
+def top_level_row_count(body: str) -> int:
+    """Number of rows in ``body`` that carry actual math.
+
+    Rows are separated by ``\\\\`` at brace- and nested-env-depth 0. A row whose
+    code part is empty does not count, so a *trailing* separator -- which adds
+    no second row -- does not make a display multi-line. Counting rows rather
+    than looking for a ``\\\\`` is what keeps the conversion idempotent: the
+    degenerate separator is dropped on the first pass, and a second pass must
+    reach the same equation/align verdict on the result.
+    """
+    rows = [""]
     braced = envd = i = 0
     s = body
     n = len(s)
@@ -143,11 +151,13 @@ def top_level_has_linebreak(body: str) -> bool:
         m = BEGIN_RE.match(s, i)
         if m and m.group(1) in NESTED_MATH:
             envd += 1
+            rows[-1] += m.group(0)
             i = m.end()
             continue
         m = END_RE.match(s, i)
         if m and m.group(1) in NESTED_MATH:
             envd -= 1
+            rows[-1] += m.group(0)
             i = m.end()
             continue
         c = s[i]
@@ -155,17 +165,20 @@ def top_level_has_linebreak(body: str) -> bool:
             i = _skip_comment(s, i)  # a \\ inside a comment is not a row break
             continue
         if c == "\\" and i + 1 < n and s[i + 1] == "\\":
-            nxt = s[i + 2] if i + 2 < n else ""
-            if braced == 0 and envd == 0 and nxt != "[":
-                return True
-            i += 2
+            m = ROW_SEP_RE.match(s, i)
+            if braced == 0 and envd == 0:
+                rows.append("")
+            else:
+                rows[-1] += m.group(0)
+            i = m.end()
             continue
         if c == "{" and (i == 0 or s[i - 1] != "\\"):
             braced += 1
         elif c == "}" and (i == 0 or s[i - 1] != "\\"):
             braced -= 1
+        rows[-1] += c
         i += 1
-    return False
+    return sum(1 for r in rows if r.strip())
 
 
 def strip_toplevel_amp(body: str) -> str:
@@ -203,6 +216,11 @@ def strip_toplevel_amp(body: str) -> str:
         out.append(c)
         i += 1
     return "".join(out)
+
+
+# A display-math row separator: \\ , optionally starred, optionally carrying a
+# [<len>] extra-spacing argument. All three forms end a row.
+ROW_SEP_RE = re.compile(r"\\\\\*?(?:\[[^\]]*\])?")
 
 
 def opaque_mask(lines: list[str]) -> list[bool]:

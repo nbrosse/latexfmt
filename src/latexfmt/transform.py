@@ -24,7 +24,7 @@ from .texutil import (
     opaque_mask,
     strip_toplevel_amp,
     sub_outside_comments,
-    top_level_has_linebreak,
+    top_level_row_count,
 )
 
 # Line-initial control sequences that begin structural / non-prose lines.
@@ -112,7 +112,7 @@ def pass_convert(lines: list[str], autonum: bool, refs: set[str],
                 block.append(lines[j])
                 j += 1
             body = "\n".join(block)
-            multiline = top_level_has_linebreak(body)
+            multiline = top_level_row_count(body) > 1
             target = _target_env(env, multiline, autonum)
             out.extend(_emit_block(indent, target, body, multiline, refs, prune,
                                    removed))
@@ -128,7 +128,7 @@ def pass_convert(lines: list[str], autonum: bool, refs: set[str],
                 block.append(lines[j])
                 j += 1
             body = "\n".join(block)
-            multiline = top_level_has_linebreak(body)
+            multiline = top_level_row_count(body) > 1
             target = _target_env("[", multiline, autonum)
             out.extend(_emit_block(indent, target, body, multiline, refs, prune,
                                    removed))

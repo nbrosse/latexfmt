@@ -26,6 +26,7 @@ from .texutil import (
     END_RE,
     NESTED_MATH,
     OPAQUE,
+    ROW_SEP_RE,
     end_outside_comment,
     has_unescaped_percent,
 )
@@ -133,9 +134,15 @@ def _merge_trailing_amp(chunks: list[str]) -> list[str]:
     return out
 
 
-def _split_rows(body_lines: list[str]) -> list[list[str]]:
-    """Split body physical lines into rows of atomic chunks at top-level ``\\\\``."""
-    rows: list[list[str]] = []
+def _split_rows(body_lines: list[str]) -> list[tuple[list[str], str]]:
+    """Split body physical lines into rows at top-level ``\\\\``.
+
+    Returns (chunks, separator) per row, where ``separator`` is the literal
+    ``\\\\`` / ``\\\\*`` / ``\\\\[2pt]`` that ended it ("" for the last row), so a
+    spacing argument survives the reflow instead of being replaced by a bare
+    ``\\\\``.
+    """
+    rows: list[tuple[list[str], str]] = []
     cur: list[str] = []
     braced = envd = 0
     for raw in body_lines:
@@ -165,17 +172,17 @@ def _split_rows(body_lines: list[str]) -> list[list[str]]:
                 i = n
                 break
             if c == "\\" and i + 1 < n and s[i + 1] == "\\":
-                nxt = s[i + 2] if i + 2 < n else ""
-                if braced == 0 and envd == 0 and nxt != "[":
+                sep = ROW_SEP_RE.match(s, i)
+                if braced == 0 and envd == 0:
                     if buf.strip():
                         cur.append(buf.strip())
-                    rows.append(cur)
+                    rows.append((cur, sep.group(0)))
                     cur = []
                     buf = ""
-                    i += 2
+                    i = sep.end()
                     continue
-                buf += "\\\\"
-                i += 2
+                buf += sep.group(0)
+                i = sep.end()
                 continue
             if c == "{" and (i == 0 or s[i - 1] != "\\"):
                 braced += 1
@@ -185,8 +192,8 @@ def _split_rows(body_lines: list[str]) -> list[list[str]]:
             i += 1
         if buf.strip():
             cur.append(buf.strip())
-    rows.append(cur)
-    while rows and not rows[-1]:
+    rows.append((cur, ""))
+    while rows and not rows[-1][0]:
         rows.pop()
     return rows
 
@@ -282,20 +289,22 @@ def standardize(lines: list[str], width: int = 100) -> list[str]:
             body_indent = len(indent) + 2
             rows = _split_rows(body_lines)
             out.append(begin_line)
-            last_idx = max((k for k, r in enumerate(rows) if r), default=-1)
-            for r_idx, row in enumerate(rows):
+            last_idx = max((k for k, r in enumerate(rows) if r[0]), default=-1)
+            for r_idx, (row, sep) in enumerate(rows):
                 if not row:
                     continue
                 last_row = r_idx == last_idx
-                wl = _wrap_row(row, body_indent, width, reserve=0 if last_row else 3)
+                sep = "" if last_row else (sep or "\\\\")
+                wl = _wrap_row(row, body_indent, width,
+                               reserve=0 if last_row else len(sep) + 1)
                 for li, ln in enumerate(wl):
-                    if li == len(wl) - 1 and not last_row:
+                    if li == len(wl) - 1 and sep:
                         if has_unescaped_percent(ln):
-                            # \\ appended after a comment would be commented out
+                            # a separator after a comment would be commented out
                             out.append(ln)
-                            out.append(" " * body_indent + "\\\\")
+                            out.append(" " * body_indent + sep)
                         else:
-                            out.append(ln + " \\\\")
+                            out.append(ln + " " + sep)
                     else:
                         out.append(ln)
             end_line = indent + "\\end{" + env + "}"
