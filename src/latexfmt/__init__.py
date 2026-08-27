@@ -1,0 +1,6 @@
+"""latexfmt -- format a LaTeX project to house conventions."""
+
+from ._version import __version__
+from .cli import main
+
+__all__ = ["__version__", "main"]

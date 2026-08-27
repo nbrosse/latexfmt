@@ -1,0 +1,393 @@
+"""Shared LaTeX parsing helpers: regexes, environment classes, brace/env-depth
+utilities, project input resolution, autonum detection and reference scanning.
+"""
+
+from __future__ import annotations
+
+import codecs
+import fnmatch
+import os
+import re
+import tempfile
+from contextlib import suppress
+from pathlib import Path
+
+BEGIN_RE = re.compile(r"\\begin\{([^}]*)\}")
+END_RE = re.compile(r"\\end\{([^}]*)\}")
+LABEL_RE = re.compile(r"\\label\{([^}]*)\}")
+
+# Environments whose interior must never be reflowed/re-indented by us.
+OPAQUE = {
+    "tikzpicture", "verbatim", "lstlisting", "comment", "minted",
+    "tabular", "tabular*", "tabularx", "longtable", "supertabular", "tabbing",
+}
+# Top-level display-math environments we normalize.
+MATH = {"equation", "equation*", "align", "align*"}
+# Nested math constructs that may contain their own '\\' and '&'; ignored when
+# deciding whether a display is genuinely multi-line.
+NESTED_MATH = {
+    "bmatrix", "pmatrix", "matrix", "vmatrix", "Vmatrix", "Bmatrix",
+    "smallmatrix", "cases", "aligned", "array", "split", "gathered", "subarray",
+}
+
+# Commands that reference a label (cleveref, hyperref). Used to decide which
+# \label{...} are dead. Conservative: references inside comments count too, so
+# nothing referenced anywhere is dropped.
+_REF_NAMES = [
+    "ref", "eqref", "pageref", "autoref", "nameref", "vref", "Vref",
+    "vpageref", "cref", "Cref", "cpageref", "Cpageref", "crefrange",
+    "Crefrange", "cpagerefrange", "labelcref", "labelcpageref", "subref",
+]
+_REF_RE = re.compile(r"\\(?:" + "|".join(_REF_NAMES) + r")\*?\s*\{([^}]*)\}")
+_HYPERREF_RE = re.compile(r"\\hyperref\s*\[([^\]]*)\]")
+_INPUT_RE = re.compile(r"\\(?:input|include|subfile)\{([^}]*)\}")
+
+
+class LatexfmtError(Exception):
+    """A user-facing error: reported as a message, never as a traceback."""
+
+
+def read_text(path: Path, encoding: str = "utf-8") -> str:
+    """Read ``path``, turning decode/IO failures into a LatexfmtError.
+
+    Guessing an encoding would silently corrupt the file on write-back, so a
+    mismatch is reported and the user picks with ``--encoding``.
+    """
+    try:
+        return path.read_text(encoding=encoding)
+    except UnicodeDecodeError as exc:
+        raise LatexfmtError(
+            f"{path}: not valid {encoding} (byte {exc.start}); "
+            f"re-run with --encoding=<codec>") from exc
+    except OSError as exc:
+        raise LatexfmtError(f"{path}: {exc.strerror}") from exc
+
+
+def write_text(path: Path, text: str, encoding: str = "utf-8") -> None:
+    """Atomically replace ``path`` with ``text``, preserving its mode.
+
+    Writing through a sibling temporary file prevents an interrupted formatter
+    from leaving a truncated source file behind.
+    """
+    tmp_path: Path | None = None
+    try:
+        codecs.lookup(encoding)
+        # Replacing a symlink path would destroy the link. Replace its resolved
+        # target instead, matching Path.write_text's existing follow-link behavior.
+        target = path.resolve() if path.is_symlink() else path
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp",
+                                        dir=target.parent)
+        tmp_path = Path(tmp_name)
+        with os.fdopen(fd, "w", encoding=encoding) as fh:
+            fh.write(text)
+            fh.flush()
+            os.fsync(fh.fileno())
+        if target.exists():
+            tmp_path.chmod(target.stat().st_mode)
+        tmp_path.replace(target)
+        tmp_path = None
+    except (LookupError, OSError, UnicodeEncodeError) as exc:
+        raise LatexfmtError(f"{path}: cannot write ({exc})") from exc
+    finally:
+        if tmp_path is not None:
+            with suppress(OSError):
+                tmp_path.unlink(missing_ok=True)
+
+
+def is_escaped(text: str, index: int) -> bool:
+    """Whether ``text[index]`` follows an odd run of backslashes."""
+    backslashes = 0
+    index -= 1
+    while index >= 0 and text[index] == "\\":
+        backslashes += 1
+        index -= 1
+    return backslashes % 2 == 1
+
+
+def split_comment(line: str) -> tuple[str, str]:
+    """Split ``line`` at its first unescaped ``%`` into (code, comment).
+
+    ``comment`` includes the ``%`` and is ``""`` when the line has none.
+    """
+    i = 0
+    while i < len(line):
+        if line[i] == "%" and not is_escaped(line, i):
+            return line[:i], line[i:]
+        i += 1
+    return line, ""
+
+
+def strip_comment(line: str) -> str:
+    """Drop an unescaped ``%...`` comment (keep escaped ``\\%``)."""
+    return split_comment(line)[0]
+
+
+def sub_outside_comments(rx: re.Pattern, repl, text: str) -> str:
+    """``rx.sub(repl, ...)`` applied to the code part of every line only.
+
+    Comments are passed through untouched, so a commented-out ``\\label`` is
+    never rewritten or counted.
+    """
+    out = []
+    for line in text.split("\n"):
+        code, comment = split_comment(line)
+        out.append(rx.sub(repl, code) + comment)
+    return "\n".join(out)
+
+
+def findall_outside_comments(rx: re.Pattern, text: str) -> list:
+    """``rx.findall`` over the code part of every line only."""
+    found: list = []
+    for line in text.split("\n"):
+        found.extend(rx.findall(split_comment(line)[0]))
+    return found
+
+
+def _skip_comment(s: str, i: int) -> int:
+    """Index of the newline ending the comment starting at ``s[i]`` (or len)."""
+    nl = s.find("\n", i)
+    return len(s) if nl < 0 else nl
+
+
+def has_unescaped_percent(s: str) -> bool:
+    i = 0
+    while i < len(s):
+        if s[i] == "%" and not is_escaped(s, i):
+            return True
+        i += 1
+    return False
+
+
+def end_outside_comment(line: str, env: str) -> tuple[str, str] | None:
+    """Match ``\\end{env}`` outside a comment; return (before, after) or None.
+
+    Scanning the code part only keeps a commented-out ``\\end{...}`` from
+    truncating a block.
+    """
+    code, comment = split_comment(line)
+    m = re.match(r"^(.*)\\end\{" + re.escape(env) + r"\}(.*)$", code)
+    if not m:
+        return None
+    return m.group(1), m.group(2) + comment
+
+
+def top_level_row_count(body: str) -> int:
+    """Number of rows in ``body`` that carry actual math.
+
+    Rows are separated by ``\\\\`` at brace- and nested-env-depth 0. A row whose
+    code part is empty does not count, so a *trailing* separator -- which adds
+    no second row -- does not make a display multi-line. Counting rows rather
+    than looking for a ``\\\\`` is what keeps the conversion idempotent: the
+    degenerate separator is dropped on the first pass, and a second pass must
+    reach the same equation/align verdict on the result.
+    """
+    rows = [""]
+    braced = envd = i = 0
+    s = body
+    n = len(s)
+    while i < n:
+        m = BEGIN_RE.match(s, i)
+        if m and m.group(1) in NESTED_MATH:
+            envd += 1
+            rows[-1] += m.group(0)
+            i = m.end()
+            continue
+        m = END_RE.match(s, i)
+        if m and m.group(1) in NESTED_MATH:
+            envd -= 1
+            rows[-1] += m.group(0)
+            i = m.end()
+            continue
+        c = s[i]
+        if c == "%" and not is_escaped(s, i):
+            i = _skip_comment(s, i)  # a \\ inside a comment is not a row break
+            continue
+        if c == "\\" and i + 1 < n and s[i + 1] == "\\":
+            m = ROW_SEP_RE.match(s, i)
+            if braced == 0 and envd == 0:
+                rows.append("")
+            else:
+                rows[-1] += m.group(0)
+            i = m.end()
+            continue
+        if c == "{" and not is_escaped(s, i):
+            braced += 1
+        elif c == "}" and not is_escaped(s, i):
+            braced -= 1
+        rows[-1] += c
+        i += 1
+    return sum(1 for r in rows if r.strip())
+
+
+def strip_toplevel_amp(body: str) -> str:
+    """Remove alignment ``&`` at brace/nested-env depth 0 (single-line case)."""
+    braced = envd = i = 0
+    out: list[str] = []
+    s = body
+    n = len(s)
+    while i < n:
+        m = BEGIN_RE.match(s, i)
+        if m and m.group(1) in NESTED_MATH:
+            envd += 1
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        m = END_RE.match(s, i)
+        if m and m.group(1) in NESTED_MATH:
+            envd -= 1
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        c = s[i]
+        if c == "%" and not is_escaped(s, i):
+            end = _skip_comment(s, i)  # copy the comment through untouched
+            out.append(s[i:end])
+            i = end
+            continue
+        if c == "&" and braced == 0 and envd == 0 and not is_escaped(s, i):
+            i += 1
+            continue
+        if c == "{" and not is_escaped(s, i):
+            braced += 1
+        elif c == "}" and not is_escaped(s, i):
+            braced -= 1
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+# A display-math row separator: \\ , optionally starred, optionally carrying a
+# [<len>] extra-spacing argument. All three forms end a row.
+ROW_SEP_RE = re.compile(r"\\\\\*?(?:\[[^\]]*\])?")
+
+
+def opaque_mask(lines: list[str]) -> list[bool]:
+    """Per-line flag: True where the line is inside an opaque environment.
+
+    The ``\\begin``/``\\end`` lines themselves are outside; only the body is
+    masked.
+    """
+    mask = [False] * len(lines)
+    depth = 0
+    for i, line in enumerate(lines):
+        s = line.strip()
+        mb, me = BEGIN_RE.match(s), END_RE.match(s)
+        if me and me.group(1) in OPAQUE and depth > 0:
+            depth -= 1
+            mask[i] = False
+            continue
+        mask[i] = depth > 0
+        if mb and mb.group(1) in OPAQUE:
+            depth += 1
+    return mask
+
+
+class Project:
+    """Resolved view of a LaTeX project rooted at ``root``.
+
+    - ``all_files``: root + every resolved input (for reference scanning).
+    - ``body_files``: inputs pulled in *after* ``\\begin{document}``.
+    - ``preamble_files``: inputs pulled in *before* ``\\begin{document}``.
+    """
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.all_files: list[Path] = []
+        self.body_files: list[Path] = []
+        self.preamble_files: list[Path] = []
+
+
+def _resolve_path(name: str, base: Path) -> Path | None:
+    p = base / name
+    if p.suffix != ".tex":
+        p = p.with_suffix(".tex")
+    return p if p.is_file() else None
+
+
+def _excluded(path: Path, exclude: list[str]) -> bool:
+    s = str(path)
+    return any(fnmatch.fnmatch(s, pat) or fnmatch.fnmatch(path.name, pat)
+               for pat in exclude)
+
+
+def _visible_code(text: str, *, mask_opaque: bool = True) -> str:
+    """Return position-preserving source with comments/opaque bodies blanked.
+
+    Keeping line lengths unchanged lets callers use match offsets against this
+    view while ensuring inactive ``\\input`` and package commands are ignored.
+    """
+    lines = text.splitlines(keepends=True)
+    bodies = [line.rstrip("\r\n") for line in lines]
+    mask = opaque_mask(bodies) if mask_opaque else [False] * len(lines)
+    visible: list[str] = []
+    for line, body, inside in zip(lines, bodies, mask, strict=True):
+        ending = line[len(body):]
+        if inside:
+            visible.append(" " * len(body) + ending)
+            continue
+        code, _ = split_comment(body)
+        visible.append(code + " " * (len(body) - len(code)) + ending)
+    return "".join(visible)
+
+
+def resolve_project(root_path: str | Path,
+                    exclude: list[str] | None = None,
+                    encoding: str = "utf-8") -> Project:
+    """Resolve a root ``.tex`` and all files it ``\\input``s / ``\\include``s.
+
+    Inputs are classified preamble vs body by their position relative to
+    ``\\begin{document}`` in the root. Nested inputs inherit their parent's
+    class. Files matching ``exclude`` globs are skipped.
+    """
+    exclude = exclude or []
+    root = Path(root_path).resolve()
+    proj = Project(root)
+    seen: set[Path] = set()
+
+    def walk(path: Path, cls: str) -> None:
+        if path in seen or not path.is_file():
+            return
+        seen.add(path)
+        proj.all_files.append(path)
+        text = _visible_code(read_text(path, encoding))
+        segments = [(text, cls)]
+        if path == root:
+            idx = text.find(r"\begin{document}")
+            if idx >= 0:
+                segments = [(text[:idx], "preamble"), (text[idx:], "body")]
+        for seg_text, seg_cls in segments:
+            for m in _INPUT_RE.finditer(seg_text):
+                child = _resolve_path(m.group(1), path.parent)
+                if child is None or _excluded(child, exclude):
+                    continue
+                if child not in seen:
+                    (proj.preamble_files if seg_cls == "preamble"
+                     else proj.body_files).append(child)
+                walk(child, seg_cls)
+
+    walk(root, "body")
+    return proj
+
+
+def detect_autonum(files: list[Path], encoding: str = "utf-8") -> bool:
+    """True if any file loads the ``autonum`` package."""
+    pat = re.compile(r"\\(?:usepackage|RequirePackage)\b[^\n]*\{[^}]*\bautonum\b")
+    return any(pat.search(_visible_code(read_text(f, encoding))) for f in files)
+
+
+def collect_referenced_labels(files: list[Path],
+                              encoding: str = "utf-8") -> set[str]:
+    """All label names referenced anywhere (cleveref comma-lists expanded)."""
+    refs: set[str] = set()
+    for f in files:
+        text = read_text(f, encoding)
+        for rx in (_REF_RE, _HYPERREF_RE):
+            for m in rx.finditer(text):
+                arg = m.group(1).strip()
+                if arg:
+                    refs.add(arg)  # whole arg: single-label cmds (\eqref{a(y,s)})
+                for name in arg.split(","):  # cleveref comma-lists
+                    name = name.strip()
+                    if name:
+                        refs.add(name)
+    return refs
