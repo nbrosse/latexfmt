@@ -13,10 +13,37 @@ dependencies = []
 latexfmt = "latexfmt:main"
 
 [dependency-groups]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 90
+target-version = "py313"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "F",    # pyflakes
+    "E", "W",  # pycodestyle
+    "I",    # import sorting
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "RET",  # return style
+    "PTH",  # use pathlib
+    "RUF",
+]
+ignore = [
+    "E501",    # long lines: prose in docstrings is wrapped by hand
+    "SIM108",  # ternaries are not always clearer than an if/else
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]
 
 [build-system]
 requires = ["uv_build>=0.10.11,<0.11.0"]

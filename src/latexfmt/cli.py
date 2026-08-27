@@ -111,7 +111,7 @@ def _run_latexindent(text: str, cfg_path: Path, tool: str) -> str | None:
         tmp = Path(td) / "body.tex"
         tmp.write_text(text, encoding="utf-8")
         try:
-            r = subprocess.run(cmd + [str(tmp)], capture_output=True, text=True,
+            r = subprocess.run([*cmd, str(tmp)], capture_output=True, text=True,
                                cwd=td, timeout=300)
         except (OSError, subprocess.SubprocessError):
             return None

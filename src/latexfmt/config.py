@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import shutil
 import tomllib
-from importlib import resources
 from dataclasses import dataclass, field, fields
+from importlib import resources
 from pathlib import Path
 
 

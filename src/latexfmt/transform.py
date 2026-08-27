@@ -71,7 +71,7 @@ def pass_whitespace(lines: list[str]) -> list[str]:
     silently reflow tables that the pipeline promises to keep verbatim.
     """
     return [ln if inside else ln.replace("\t", " ").rstrip()
-            for ln, inside in zip(lines, opaque_mask(lines))]
+            for ln, inside in zip(lines, opaque_mask(lines), strict=True)]
 
 
 # ---------------------------------------------------------------------------
@@ -162,7 +162,7 @@ def _emit_block(indent: str, target: str, body: str, multiline: bool,
         # tabs are meaningless once the row is not split.
         body = strip_toplevel_amp(sub_outside_comments(LABEL_RE, "", body))
         if kept:
-            out[0] += "".join("\\label{%s}" % lb for lb in kept)
+            out[0] += "".join(f"\\label{{{lb}}}" for lb in kept)
     for bl in body.split("\n"):
         bl = bl.strip()
         if bl:
