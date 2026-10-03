@@ -137,10 +137,51 @@ class TestProjectResolution:
         proj = resolve_project(root, exclude=["*old*"])
         assert proj.body_files == []
 
+    def test_excluded_input_is_scanned_but_not_formatted(self, tmp_path):
+        # An excluded file is still compiled: its references (and those of
+        # the files it inputs) must count, but none of them is formatted.
+        child = self._write(tmp_path, "child.tex", "x\n")
+        gen = self._write(tmp_path, "gen_table.tex", "\\input{child}\n")
+        root = self._write(tmp_path, "main.tex",
+                           "\\begin{document}\n\\input{gen_table}\n\\end{document}\n")
+        proj = resolve_project(root, exclude=["gen_*"])
+        assert proj.body_files == []
+        assert proj.all_files == [root, gen, child]
+
     def test_missing_input_is_skipped_not_fatal(self, tmp_path):
         root = self._write(tmp_path, "main.tex",
                            "\\begin{document}\n\\input{gone}\n\\end{document}\n")
-        assert resolve_project(root).body_files == []
+        proj = resolve_project(root)
+        assert proj.body_files == []
+        assert [(p.name, name) for p, name in proj.missing] == [("main.tex", "gone")]
+
+    def test_nested_input_resolves_against_the_root_directory(self, tmp_path):
+        # LaTeX resolves every \input against the compilation directory (the
+        # root's), not against the directory of the file that contains it.
+        (tmp_path / "sections").mkdir()
+        (tmp_path / "figures").mkdir()
+        fig = self._write(tmp_path, "figures/fig.tex", "\\cref{eq:a}\n")
+        sec = self._write(tmp_path, "sections/sec.tex", "\\input{figures/fig.tex}\n")
+        root = self._write(tmp_path, "main.tex",
+                           "\\begin{document}\n\\input{sections/sec}\n\\end{document}\n")
+        proj = resolve_project(root)
+        assert proj.body_files == [sec, fig]
+        assert proj.missing == []
+
+    def test_nested_input_falls_back_to_the_including_directory(self, tmp_path):
+        (tmp_path / "chap").mkdir()
+        part = self._write(tmp_path, "chap/part.tex", "text\n")
+        chap = self._write(tmp_path, "chap/chap.tex", "\\input{part}\n")
+        root = self._write(tmp_path, "main.tex",
+                           "\\begin{document}\n\\input{chap/chap}\n\\end{document}\n")
+        assert resolve_project(root).body_files == [chap, part]
+
+    def test_dotted_name_gets_tex_appended_not_its_suffix_replaced(self, tmp_path):
+        fig = self._write(tmp_path, "fig.v2.tex", "text\n")
+        self._write(tmp_path, "fig.tex", "wrong file\n")
+        root = self._write(tmp_path, "main.tex",
+                           "\\begin{document}\n\\input{fig.v2}\n\\end{document}\n")
+        assert resolve_project(root).body_files == [fig]
 
     def test_input_cycle_terminates(self, tmp_path):
         self._write(tmp_path, "a.tex", "\\input{b}\n")

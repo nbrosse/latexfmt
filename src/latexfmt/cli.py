@@ -171,6 +171,13 @@ def _main(argv: list[str] | None) -> int:
         targets = [(p, False) for p in proj.body_files]
 
     warnings: list[str] = []
+    for parent, name in proj.missing:
+        warnings.append(f"\\input{{{name}}} in {_relpath(parent, workdir)}: not found "
+                        "-> not formatted, its references not scanned")
+    if proj.missing and cfg.prune_labels:
+        # A reference in an unseen file would make its label look dead.
+        cfg.prune_labels = False
+        warnings.append("unresolved inputs -> label pruning disabled (as --keep-labels)")
     use_latexindent = cfg.latexindent and tools.latexindent is not None
     if cfg.latexindent and tools.latexindent is None:
         warnings.append("latexindent not found on PATH -> skipping (Python "
