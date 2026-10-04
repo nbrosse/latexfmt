@@ -288,6 +288,8 @@ class Project:
     - ``all_files``: root + every resolved input (for reference scanning).
     - ``body_files``: inputs pulled in *after* ``\\begin{document}``.
     - ``preamble_files``: inputs pulled in *before* ``\\begin{document}``.
+    - ``missing``: ``(including file, name)`` of every input that resolved to
+      no file; its references are unknown, so label pruning is unsafe.
     """
 
     def __init__(self, root: Path):
@@ -295,13 +297,25 @@ class Project:
         self.all_files: list[Path] = []
         self.body_files: list[Path] = []
         self.preamble_files: list[Path] = []
+        self.missing: list[tuple[Path, str]] = []
 
 
-def _resolve_path(name: str, base: Path) -> Path | None:
-    p = base / name
-    if p.suffix != ".tex":
-        p = p.with_suffix(".tex")
-    return p if p.is_file() else None
+def _resolve_path(name: str, root_dir: Path, parent_dir: Path) -> Path | None:
+    """Locate ``\\input{name}`` the way TeX does.
+
+    TeX resolves every input against the compilation directory, i.e. the
+    root's, wherever the ``\\input`` sits; the including file's directory is
+    only a fallback (projects whose subdirectories input their siblings). As
+    in TeX, ``.tex`` is appended rather than substituted: ``fig.v2`` is
+    ``fig.v2.tex``.
+    """
+    if not name.endswith(".tex"):
+        name += ".tex"
+    for base in (root_dir, parent_dir):
+        p = (base / name).resolve()
+        if p.is_file():
+            return p
+    return None
 
 
 def _excluded(path: Path, exclude: list[str]) -> bool:
@@ -337,14 +351,16 @@ def resolve_project(root_path: str | Path,
 
     Inputs are classified preamble vs body by their position relative to
     ``\\begin{document}`` in the root. Nested inputs inherit their parent's
-    class. Files matching ``exclude`` globs are skipped.
+    class. Files matching ``exclude`` globs, and the files they input, are
+    not formatted but are still scanned for references (``all_files``): they
+    are compiled, so a label they reference is live.
     """
     exclude = exclude or []
     root = Path(root_path).resolve()
     proj = Project(root)
     seen: set[Path] = set()
 
-    def walk(path: Path, cls: str) -> None:
+    def walk(path: Path, cls: str, formatted: bool = True) -> None:
         if path in seen or not path.is_file():
             return
         seen.add(path)
@@ -357,13 +373,16 @@ def resolve_project(root_path: str | Path,
                 segments = [(text[:idx], "preamble"), (text[idx:], "body")]
         for seg_text, seg_cls in segments:
             for m in _INPUT_RE.finditer(seg_text):
-                child = _resolve_path(m.group(1), path.parent)
-                if child is None or _excluded(child, exclude):
+                name = m.group(1).strip()
+                child = _resolve_path(name, root.parent, path.parent)
+                if child is None:
+                    proj.missing.append((path, name))
                     continue
-                if child not in seen:
+                child_formatted = formatted and not _excluded(child, exclude)
+                if child_formatted and child not in seen:
                     (proj.preamble_files if seg_cls == "preamble"
                      else proj.body_files).append(child)
-                walk(child, seg_cls)
+                walk(child, seg_cls, child_formatted)
 
     walk(root, "body")
     return proj

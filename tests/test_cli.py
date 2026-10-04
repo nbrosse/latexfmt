@@ -98,6 +98,41 @@ def test_referenced_label_survives(project):
     assert "eq:live" in project.body.read_text()
 
 
+def test_label_referenced_from_a_nested_input_survives(project):
+    # body.tex inputs sections/sec.tex, which inputs figures/fig.tex by a path
+    # relative to the root; the only reference to eq:live is in the figure.
+    d = project.dir
+    (d / "sections").mkdir()
+    (d / "figures").mkdir()
+    (d / "figures" / "fig.tex").write_text("\\caption{Terms of \\cref{eq:live}.}\n")
+    (d / "sections" / "sec.tex").write_text(
+        "\\begin{align}\n  a &= b \\label{eq:live}\n\\end{align}\n"
+        "\\input{figures/fig.tex}\n")
+    root = project("\\input{sections/sec}\n")
+    assert run(root) == EXIT_OK
+    assert "eq:live" in (d / "sections" / "sec.tex").read_text()
+
+
+def test_label_referenced_from_an_excluded_input_survives(project):
+    (project.dir / "gen_table.tex").write_text("see \\eqref{eq:live}\n")
+    (project.dir / "latexfmt.toml").write_text('exclude = ["gen_*"]\n')
+    root = project("\\begin{align}\n  a &= b \\label{eq:live}\n\\end{align}\n"
+                   "\\input{gen_table}\n")
+    assert run(root) == EXIT_OK
+    assert "eq:live" in project.body.read_text()
+    assert (project.dir / "gen_table.tex").read_text() == "see \\eqref{eq:live}\n"
+
+
+def test_unresolved_input_disables_pruning_and_warns(project, capsys):
+    root = project("\\begin{align}\n  a &= b \\label{eq:maybe}\n\\end{align}\n"
+                   "\\input{gone}\n")
+    assert run(root) == EXIT_OK
+    assert "eq:maybe" in project.body.read_text()
+    out = capsys.readouterr().out
+    assert "\\input{gone}" in out and "not found" in out
+    assert "labels removed" not in out
+
+
 def test_preamble_untouched_without_all(project):
     """Without --all only body files are formatted; the root keeps its preamble."""
     root = project(UNFORMATTED)

@@ -2,6 +2,10 @@
 
 `latexfmt` formats a LaTeX project to a set of house conventions. Point it at a
 root `.tex`; it resolves every `\input`/`\include` and formats the body files.
+As in TeX, an input path is relative to the root's directory wherever the
+`\input` sits (the including file's directory is tried as a fallback). An input
+that resolves to no file is reported, and label pruning is then turned off,
+since a reference inside that file would be invisible.
 
 ## Installation
 
