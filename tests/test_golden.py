@@ -74,3 +74,16 @@ def test_starred_math_body_is_standardized():
                    "  a = b + c + d + e\n"
                    "  + f + g\n"
                    "\\end{equation*}\n")
+
+
+def test_a_pass_that_alters_an_opaque_body_is_refused(monkeypatch):
+    """The opaque-body invariant is checked after the passes: a regression in
+    any of them must raise before anything is written, not compile silently."""
+    from latexfmt import transform
+    from latexfmt.texutil import LatexfmtError
+
+    monkeypatch.setattr(transform, "pass_blanks",
+                        lambda lines: [ln for ln in lines if ln.strip()])
+    source = "\\begin{verbatim}\na\n\nb\n\\end{verbatim}\n"
+    with pytest.raises(LatexfmtError, match="opaque environment"):
+        transform_text(source, refs=set(), autonum=False)

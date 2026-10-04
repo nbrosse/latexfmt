@@ -21,6 +21,9 @@ OPAQUE = {
     "tikzpicture", "verbatim", "lstlisting", "comment", "minted",
     "tabular", "tabular*", "tabularx", "longtable", "supertabular", "tabbing",
 }
+# Opaque environments whose body TeX reads verbatim: nothing inside them is parsed,
+# so only their own \end{...} closes them, whatever else the body contains.
+VERBATIM_LIKE = {"verbatim", "lstlisting", "comment", "minted"}
 # Top-level display-math environments we normalize.
 MATH = {"equation", "equation*", "align", "align*"}
 # Nested math constructs that may contain their own '\\' and '&'; ignored when
@@ -36,9 +39,14 @@ NESTED_MATH = {
 _REF_NAMES = [
     "ref", "eqref", "pageref", "autoref", "nameref", "vref", "Vref",
     "vpageref", "cref", "Cref", "cpageref", "Cpageref", "crefrange",
-    "Crefrange", "cpagerefrange", "labelcref", "labelcpageref", "subref",
+    "Crefrange", "cpagerefrange", "Cpagerefrange", "labelcref", "labelcpageref",
+    "subref",
 ]
 _REF_RE = re.compile(r"\\(?:" + "|".join(_REF_NAMES) + r")\*?\s*\{([^}]*)\}")
+# Range commands take two labels; _REF_RE sees only the first.
+_RANGE_RE = re.compile(
+    r"\\(?:crefrange|Crefrange|cpagerefrange|Cpagerefrange)\*?\s*"
+    r"\{[^}]*\}\s*\{([^}]*)\}")
 _HYPERREF_RE = re.compile(r"\\hyperref\s*\[([^\]]*)\]")
 _INPUT_RE = re.compile(r"\\(?:input|include|subfile)\{([^}]*)\}")
 
@@ -265,20 +273,28 @@ def opaque_mask(lines: list[str]) -> list[bool]:
     """Per-line flag: True where the line is inside an opaque environment.
 
     The ``\\begin``/``\\end`` lines themselves are outside; only the body is
-    masked.
+    masked. Opaque environments nest (a ``tabular`` inside a ``tabular``), except
+    verbatim-like ones, which only their own ``\\end`` closes.
     """
     mask = [False] * len(lines)
-    depth = 0
+    stack: list[str] = []
     for i, line in enumerate(lines):
         s = line.strip()
         mb, me = BEGIN_RE.match(s), END_RE.match(s)
-        if me and me.group(1) in OPAQUE and depth > 0:
-            depth -= 1
-            mask[i] = False
+        if stack and stack[-1] in VERBATIM_LIKE:
+            if me and me.group(1) == stack[-1]:
+                stack.pop()
+                mask[i] = bool(stack)
+            else:
+                mask[i] = True
             continue
-        mask[i] = depth > 0
+        if me and me.group(1) in OPAQUE and stack:
+            stack.pop()
+            mask[i] = bool(stack)
+            continue
+        mask[i] = bool(stack)
         if mb and mb.group(1) in OPAQUE:
-            depth += 1
+            stack.append(mb.group(1))
     return mask
 
 
@@ -400,7 +416,7 @@ def collect_referenced_labels(files: list[Path],
     refs: set[str] = set()
     for f in files:
         text = read_text(f, encoding)
-        for rx in (_REF_RE, _HYPERREF_RE):
+        for rx in (_REF_RE, _HYPERREF_RE, _RANGE_RE):
             for m in rx.finditer(text):
                 arg = m.group(1).strip()
                 if arg:

@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- The body of a `verbatim`, `lstlisting`, `minted` or `comment` environment is
+  left untouched, as documented. Before, a display-math example inside it was
+  converted (an `align` became an `equation`) and its labels pruned, and blank
+  lines inside it were collapsed. A `\begin`/`\end` inside such a body no longer
+  opens or closes anything.
+- The second label of `\crefrange`, `\Crefrange`, `\cpagerefrange` and
+  `\Cpagerefrange` counts as referenced. Before, only the first did, so the
+  second could be pruned as dead.
+
+### Added
+
+- Opaque environment bodies are compared before and after formatting; if a pass
+  would change one, the file is refused and nothing is written. A `latexmk`
+  build cannot catch this, since an altered example still compiles.
+
 ## [0.2.0] - 2026-10-04
 
 ### Added

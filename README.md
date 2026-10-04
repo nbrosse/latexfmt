@@ -133,7 +133,9 @@ undefined or multiply-defined references.
 
 Opaque environments — `tabular`, `tabularx`, `longtable`, `verbatim`,
 `lstlisting`, `minted`, `tikzpicture`, `comment` — are left byte-for-byte alone
-by every pass, and are exempt from the verify checks. Hand-aligned tables keep
+by every pass, and are exempt from the verify checks. This is checked, not only
+intended: if a pass would change an opaque body, the file is refused before
+anything is written. Hand-aligned tables keep
 their tabs.
 
 Comments are preserved everywhere, including inside display math. With
