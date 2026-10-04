@@ -6,6 +6,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- A [pre-commit](https://pre-commit.com) hook, `latexfmt`. It takes the root `.tex`
+  in `args`; see the README.
+
 ### Fixed
 
 - Nested `\input`/`\include` paths are resolved against the root's directory, as
