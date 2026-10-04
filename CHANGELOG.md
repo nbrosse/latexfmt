@@ -6,6 +6,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-04
+
 ### Fixed
 
 - The body of a `verbatim`, `lstlisting`, `minted` or `comment` environment is
@@ -58,6 +60,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Initial release.
 
-[Unreleased]: https://github.com/nbrosse/latexfmt/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/nbrosse/latexfmt/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/nbrosse/latexfmt/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/nbrosse/latexfmt/compare/855419b...v0.2.0
 [0.1.0]: https://github.com/nbrosse/latexfmt/commit/855419b

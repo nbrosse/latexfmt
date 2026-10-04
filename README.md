@@ -104,7 +104,7 @@ argument rather than the list of staged files:
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/nbrosse/latexfmt
-    rev: v0.2.0
+    rev: v0.2.1
     hooks:
       - id: latexfmt
         args: [main.tex, --check]
