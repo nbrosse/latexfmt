@@ -1,6 +1,6 @@
 [project]
 name = "latexfmt"
-version = "0.1.0"
+version = "0.2.0"
 description = "Format a LaTeX project to house conventions (math standardization, indentation, prose reflow)"
 readme = "README.md"
 authors = [

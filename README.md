@@ -53,17 +53,17 @@ to check that no reference broke.
 
 ## Installation
 
-`latexfmt` requires Python 3.13 or newer. Install the command directly from the
-Git repository into an isolated `uv` tool environment:
+`latexfmt` requires Python 3.13 or newer. Install the command from PyPI into an
+isolated `uv` tool environment:
 
 ```console
-uv tool install git+https://github.com/nbrosse/latexfmt.git
+uv tool install latexfmt
 latexfmt --version
 ```
 
-Re-run the install with `--reinstall`, for example
-`uv tool install --reinstall git+https://github.com/nbrosse/latexfmt.git@dev`,
-to replace an existing installation. If `uv` reports that its executable
+`uv tool upgrade latexfmt` updates it. To run an unreleased version, install from
+the Git repository instead, for example
+`uv tool install --reinstall git+https://github.com/nbrosse/latexfmt.git@main`. If `uv` reports that its executable
 directory is missing from `PATH`, run `uv tool update-shell` once.
 
 For development without installation, point `uv run --project` or `uvx --from`
@@ -104,7 +104,7 @@ argument rather than the list of staged files:
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/nbrosse/latexfmt
-    rev: vX.Y.Z  # a release tag that ships this hook (after 0.1.0)
+    rev: v0.2.0
     hooks:
       - id: latexfmt
         args: [main.tex, --check]
