@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-04
+
+### Added
+
+- Published on PyPI: `uv tool install latexfmt`.
+- A [pre-commit](https://pre-commit.com) hook, `latexfmt`. It takes the root `.tex`
+  in `args`; see the README.
+
 ### Fixed
 
 - Nested `\input`/`\include` paths are resolved against the root's directory, as
@@ -33,5 +41,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Initial release.
 
-[Unreleased]: https://github.com/nbrosse/latexfmt/compare/855419b...HEAD
+[Unreleased]: https://github.com/nbrosse/latexfmt/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/nbrosse/latexfmt/compare/855419b...v0.2.0
 [0.1.0]: https://github.com/nbrosse/latexfmt/commit/855419b

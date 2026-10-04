@@ -1,0 +1,41 @@
+name: Release
+
+# Publishes to PyPI and creates the GitHub release when a version tag (v0.2.0, ...)
+# is pushed. PyPI authentication uses trusted publishing: the project lists this
+# repository, this workflow file and the `pypi` environment as a trusted publisher.
+# No token is stored.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: The tag must match the package version
+        run: |
+          version=$(uv version --short)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject version $version"
+            exit 1
+          fi
+      - run: uv sync --locked
+      - run: uv run pytest
+      - run: uv build
+      - run: uv publish
+      - name: GitHub release, with this version's CHANGELOG section as notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --notes-file notes.md

@@ -1,0 +1,8 @@
+- id: latexfmt
+  name: latexfmt
+  description: Format a LaTeX project from its root file (pass the root in args).
+  entry: latexfmt
+  language: python
+  files: \.tex$
+  pass_filenames: false
+  require_serial: true
