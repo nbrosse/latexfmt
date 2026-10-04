@@ -1,11 +1,55 @@
 # latexfmt
 
+[![CI](https://github.com/nbrosse/latexfmt/actions/workflows/ci.yml/badge.svg)](https://github.com/nbrosse/latexfmt/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue.svg)](pyproject.toml)
+
 `latexfmt` formats a LaTeX project to a set of house conventions. Point it at a
 root `.tex`; it resolves every `\input`/`\include` and formats the body files.
 As in TeX, an input path is relative to the root's directory wherever the
 `\input` sits (the including file's directory is tried as a fallback). An input
 that resolves to no file is reported, and label pruning is then turned off,
 since a reference inside that file would be invisible.
+
+A body file before and after `latexfmt main.tex --columns 60`:
+
+```latex
+The energy is bounded,
+see \eqref{eq:bound}, which
+follows from the convexity of the potential.
+\begin{align}
+  E(x) &\leq C \|x\|^2 \label{eq:bound}
+\end{align}
+and the gradient satisfies
+\begin{align}
+  \nabla E(x) &= A x \label{eq:grad} \\
+  \|\nabla E(x)\| &\leq L \|x\| \label{eq:lip}
+\end{align}
+\[
+  y = mx + b
+\]
+```
+
+```latex
+The energy is bounded, see \eqref{eq:bound}, which follows
+from the convexity of the potential.
+\begin{equation}\label{eq:bound}
+  E(x) \leq C \|x\|^2
+\end{equation}
+and the gradient satisfies
+\begin{align}
+  \nabla E(x) &= A x \\
+  \|\nabla E(x)\| &\leq L \|x\|
+\end{align}
+\begin{equation*}
+  y = mx + b
+\end{equation*}
+```
+
+The prose is reflowed; the single-row `align` becomes an `equation`, keeping its
+referenced label; `eq:grad` and `eq:lip` are referenced nowhere in the project and
+are pruned; `\[ \]` becomes `equation*`. The project is then rebuilt with `latexmk`
+to check that no reference broke.
 
 ## Installation
 
@@ -49,6 +93,26 @@ uvx --from /path/to/latexfmt latexfmt main.tex
 
 `--check` follows the `black`/`ruff` convention, so `latexfmt main.tex --check`
 works directly in CI or a pre-commit hook.
+
+### pre-commit
+
+The repository ships a [pre-commit](https://pre-commit.com) hook. `latexfmt`
+works on a whole project from its root file, so the hook receives that root as an
+argument rather than the list of staged files:
+
+```yaml
+# .pre-commit-config.yaml
+repos:
+  - repo: https://github.com/nbrosse/latexfmt
+    rev: vX.Y.Z  # a release tag that ships this hook (after 0.1.0)
+    hooks:
+      - id: latexfmt
+        args: [main.tex, --check]
+```
+
+`--check` changes nothing and does not run `latexmk`; it fails the commit when a
+file would be reformatted. Drop `--check` (and add `--no-build` to keep commits
+fast) to have the hook format the files instead.
 
 All transformations are prepared before the first write, individual writes
 replace files atomically, and a strict-verification or `latexmk` failure restores

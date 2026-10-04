@@ -1,0 +1,30 @@
+name: Release
+
+# Publishes to PyPI when a version tag (v0.1.1, ...) is pushed. Authentication uses
+# PyPI trusted publishing: the project must list this repository, this workflow file
+# and the `pypi` environment as a trusted publisher. No token is stored.
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: The tag must match the package version
+        run: |
+          version=$(uv version --short)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match pyproject version $version"
+            exit 1
+          fi
+      - run: uv sync --locked
+      - run: uv run pytest
+      - run: uv build
+      - run: uv publish
