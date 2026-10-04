@@ -113,6 +113,18 @@ class TestOpaqueMask:
         lines = [r"\begin{align}", "a &= b", r"\end{align}"]
         assert opaque_mask(lines) == [False, False, False]
 
+    def test_nested_tabular_stays_masked_until_the_outer_end(self):
+        lines = [r"\begin{tabular}{l}", r"\begin{tabular}{l}", "a", r"\end{tabular}",
+                 "b", r"\end{tabular}"]
+        assert opaque_mask(lines) == [False, True, True, True, True, False]
+
+    def test_verbatim_body_is_not_parsed(self):
+        """A verbatim example of a tabular: its \\end{tabular} must not close the
+        verbatim, and an unmatched \\begin must not keep the mask open."""
+        lines = [r"\begin{verbatim}", r"\begin{tabular}{l}", r"\end{verbatim}",
+                 "after"]
+        assert opaque_mask(lines) == [False, True, False, False]
+
 
 class TestProjectResolution:
     def _write(self, tmp_path, name, text):
@@ -227,6 +239,12 @@ class TestReferenceCollection:
         f = tmp_path / "a.tex"
         f.write_text(r"\eqref{a(y,s)}", encoding="utf-8")
         assert "a(y,s)" in collect_referenced_labels([f])
+
+    def test_range_commands_keep_both_ends(self, tmp_path):
+        f = tmp_path / "a.tex"
+        f.write_text(r"\crefrange{eq:a}{eq:z} \Cpagerefrange{s:a} {s:z}",
+                     encoding="utf-8")
+        assert {"eq:a", "eq:z", "s:a", "s:z"} <= collect_referenced_labels([f])
 
     def test_hyperref_bracket_form(self, tmp_path):
         f = tmp_path / "a.tex"

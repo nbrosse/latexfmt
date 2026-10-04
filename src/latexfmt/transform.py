@@ -93,10 +93,15 @@ def pass_convert(lines: list[str], autonum: bool, refs: set[str],
     labels *within those math blocks only*. Returns (lines, removed_labels)."""
     out: list[str] = []
     removed: list[str] = []
+    opaque = opaque_mask(lines)
     i = 0
     n = len(lines)
     while i < n:
         line = lines[i]
+        if opaque[i]:  # e.g. an align shown inside a verbatim example
+            out.append(line)
+            i += 1
+            continue
         mb = BEGIN_MATH_RE.match(line)
         db = re.match(r"^(\s*)\\\[\s*(.*)$", line)
         if mb:
@@ -350,7 +355,11 @@ def pass_reflow(lines: list[str], columns: int, wrap_comments: bool,
 def pass_blanks(lines: list[str]) -> list[str]:
     out: list[str] = []
     prev_blank = False
-    for ln in lines:
+    for ln, inside in zip(lines, opaque_mask(lines), strict=True):
+        if inside:  # blank lines in a verbatim body are content
+            out.append(ln)
+            prev_blank = False
+            continue
         blank = ln.strip() == ""
         if blank and prev_blank:
             continue
@@ -361,6 +370,19 @@ def pass_blanks(lines: list[str]) -> list[str]:
     while out and out[-1].strip() == "":
         out.pop()
     return out
+
+
+def _opaque_bodies(lines: list[str]) -> list[list[str]]:
+    """The body of every opaque environment, in order, as runs of masked lines."""
+    bodies: list[list[str]] = []
+    prev = False
+    for ln, inside in zip(lines, opaque_mask(lines), strict=True):
+        if inside:
+            if not prev:
+                bodies.append([])
+            bodies[-1].append(ln)
+        prev = inside
+    return bodies
 
 
 # ---------------------------------------------------------------------------
@@ -390,11 +412,18 @@ def transform_text(
         if not result.endswith("\n"):
             result += "\n"
         return result, []
+    before = _opaque_bodies(lines)
     lines, removed = pass_convert(lines, autonum, refs, prune_labels)
     lines = pass_indent(lines, indent)
     lines = pass_reflow(lines, columns, wrap_comments, indent)
     lines = mathstd.standardize(lines, columns)
     lines = pass_blanks(lines)
+    # A build cannot catch an altered verbatim example (it still compiles), so
+    # the promise that opaque bodies are left alone is checked here, before
+    # anything is written.
+    if _opaque_bodies(lines) != before:
+        raise LatexfmtError("internal error: an opaque environment (verbatim, "
+                            "tabular, ...) would be modified; nothing was written")
     result = "\n".join(lines)
     if not result.endswith("\n"):
         result += "\n"

@@ -27,6 +27,7 @@ from .texutil import (
     NESTED_MATH,
     OPAQUE,
     ROW_SEP_RE,
+    VERBATIM_LIKE,
     LatexfmtError,
     end_outside_comment,
     has_unescaped_percent,
@@ -323,6 +324,10 @@ def standardize(lines: list[str], width: int = 100) -> list[str]:
 
 
 def _update_opaque(stack: list[str], s: str) -> None:
+    if stack and stack[-1] in VERBATIM_LIKE:  # only its own \end closes it
+        if re.match(r"\\end\{" + re.escape(stack[-1]) + r"\}", s):
+            stack.pop()
+        return
     i = 0
     while i < len(s):
         mb = BEGIN_RE.match(s, i)

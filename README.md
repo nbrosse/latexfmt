@@ -104,7 +104,7 @@ argument rather than the list of staged files:
 # .pre-commit-config.yaml
 repos:
   - repo: https://github.com/nbrosse/latexfmt
-    rev: v0.2.0
+    rev: v0.2.1
     hooks:
       - id: latexfmt
         args: [main.tex, --check]
@@ -133,7 +133,9 @@ undefined or multiply-defined references.
 
 Opaque environments — `tabular`, `tabularx`, `longtable`, `verbatim`,
 `lstlisting`, `minted`, `tikzpicture`, `comment` — are left byte-for-byte alone
-by every pass, and are exempt from the verify checks. Hand-aligned tables keep
+by every pass, and are exempt from the verify checks. This is checked, not only
+intended: if a pass would change an opaque body, the file is refused before
+anything is written. Hand-aligned tables keep
 their tabs.
 
 Comments are preserved everywhere, including inside display math. With
