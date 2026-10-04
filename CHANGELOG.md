@@ -8,6 +8,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [0.2.1] - 2026-10-04
 
+### Added
+
+- Opaque environment bodies are compared before and after formatting; if a pass
+  would change one, the file is refused and nothing is written. A `latexmk`
+  build cannot catch this, since an altered example still compiles.
+
 ### Fixed
 
 - The body of a `verbatim`, `lstlisting`, `minted` or `comment` environment is
@@ -18,12 +24,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - The second label of `\crefrange`, `\Crefrange`, `\cpagerefrange` and
   `\Cpagerefrange` counts as referenced. Before, only the first did, so the
   second could be pruned as dead.
-
-### Added
-
-- Opaque environment bodies are compared before and after formatting; if a pass
-  would change one, the file is refused and nothing is written. A `latexmk`
-  build cannot catch this, since an altered example still compiles.
 
 ## [0.2.0] - 2026-10-04
 
